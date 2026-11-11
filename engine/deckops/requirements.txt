@@ -1,0 +1,6 @@
+python-pptx==1.0.2
+lxml>=5
+pydantic>=2.6
+Pillow>=10
+XlsxWriter>=3
+pytest>=8

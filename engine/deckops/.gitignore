@@ -1,0 +1,8 @@
+out/
+__pycache__/
+.pytest_cache/
+*.pyc
+llm.json
+*.local.json
+runs/
+llm_check_results.zip

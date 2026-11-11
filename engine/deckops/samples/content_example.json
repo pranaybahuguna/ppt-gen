@@ -1,0 +1,11 @@
+{
+  "facts": [
+    {"id": "F1", "text": "The help-desk chatbot pilot ran for 6 weeks with one support team", "source": "pilot report"},
+    {"id": "F2", "text": "38% of incoming tickets were answered by the bot without a person", "source": "pilot report"},
+    {"id": "F3", "text": "Average first response time fell from 4 hours to 2 minutes", "source": "pilot report"},
+    {"id": "F4", "text": "Customer satisfaction stayed at 4.5 out of 5, the same as before", "source": "survey"},
+    {"id": "F5", "text": "Next: add two more teams in Q1, then all teams in Q2", "source": "roadmap"},
+    {"id": "F6", "text": "Every bot answer links to the policy page it is based on", "source": "design doc"}
+  ],
+  "datasets": {}
+}
