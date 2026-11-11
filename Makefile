@@ -90,15 +90,22 @@ logs:  ## follow the services' logs
 # is where a prepared template and its kit live - a kit addresses shapes by id, so the file it
 # was built from is not scrap. Everything else is run output and can go at any time; nothing
 # of record is kept outside object storage.
+# What to KEEP, not what to delete. Listing the things to remove cannot work: run output and
+# one-off directories appear under local/ all the time, and the first version of this target
+# already missed one. Anything not named here is output and goes.
+KEEP_IN_LOCAL := fonts samples templates workspaces content.json handoff_content.json
+
 .PHONY: clean-scratch
 clean-scratch:  ## delete run output from local/, keeping fonts, samples and templates
 	@before=$$(du -sk local 2>/dev/null | cut -f1); \
-	rm -rf local/workspaces local/out local/renders; \
-	rm -f local/image-build.log; \
-	mkdir -p local/workspaces; \
+	for entry in local/*; do \
+		name=$$(basename "$$entry"); \
+		case " $(KEEP_IN_LOCAL) " in *" $$name "*) ;; *) rm -rf "$$entry";; esac; \
+	done; \
+	rm -rf local/workspaces; mkdir -p local/workspaces; \
 	after=$$(du -sk local 2>/dev/null | cut -f1); \
 	echo "local/ is now $$(du -sh local | cut -f1) (freed $$(( (before - after) / 1024 )) MB)"; \
-	echo "kept: $$(ls local)"
+	echo "kept: $$(ls local | tr '\n' ' ')"
 
 .PHONY: init
 init:  ## create the checkpoint tables and the bucket
