@@ -134,6 +134,13 @@ RESTYLE_WORDS = re.compile(
     r"|(?:move|put|redo|rebuild)\s+(?:it|this|that|the deck)?\s*(?:on)?(?:in)?to\b"
     r"|in(?:to)?\s+(?:the|our|a|another|this)\s+\S*\s*(?:corporate\s+)?(?:template|style|brand|look)"
     r"|apply\s+(?:the|our)\s+\S*\s*template)\b", re.IGNORECASE)
+#: Words that point at *another template*, not at how one slide looks. "Restyle" means moving
+#: the deck onto a different template only when one of these is present; otherwise a restyle of
+#: named slides is an edit (a different layout or different colours, same template).
+OTHER_TEMPLATE = re.compile(
+    r"\b(templates?|brand(?:ing)?|corporate|house[\s-]style|master|onto|another deck)\b",
+    re.IGNORECASE)
+SLIDE_WORD = re.compile(r"\bslides?\b", re.IGNORECASE)
 EDIT_WORDS = re.compile(r"\b(edit|change|fix|update|shorten|rewrite|reword|replace|remove|delete|"
                         r"add (a )?slide|drop|swap|tighten|less wordy|make it)\b", re.IGNORECASE)
 LANGS = {"french": "fr", "german": "de", "spanish": "es", "italian": "it", "dutch": "nl",
@@ -200,8 +207,17 @@ def rules_route(instruction: str, context: dict) -> dict:
                 "confidence": 0.9 if (lang or m) else 0.5,
                 "reason": "the request asks for another language"}
     if RESTYLE_WORDS.search(text):
-        return {"route": "restyle", "slides": [], "target_lang": None, "confidence": 0.7,
-                "reason": "the request asks for a different template's look"}
+        # "Restyle slide 3" is not "move the deck onto another template". It asks for one
+        # slide to look different inside the template it already uses, which the edit route
+        # can do (change_layout, set_style). This used to be declined with an answer about
+        # moving the whole deck, and the slide number was dropped on the way.
+        if SLIDE_WORD.search(text) and not OTHER_TEMPLATE.search(text):
+            return {"route": "edit", "slides": slides, "target_lang": None,
+                    "confidence": 0.85 if slides else 0.5,
+                    "reason": "restyling a particular slide is an edit: a different layout or "
+                              "different colours, in the template the deck already uses"}
+        return {"route": "restyle", "slides": slides, "target_lang": None, "confidence": 0.7,
+                "reason": "the request asks for the deck in a different template's look"}
     if EDIT_WORDS.search(text) or slides:
         return {"route": "edit", "slides": slides, "target_lang": None,
                 "confidence": 0.85 if EDIT_WORDS.search(text) else 0.6,

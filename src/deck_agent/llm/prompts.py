@@ -24,7 +24,9 @@ Choose exactly one route:
   "create"    a new deck (there is no current deck, or they ask for a new one)
   "edit"      change the current deck: text, slides, structure
   "translate" the same deck in another language
-  "restyle"   the same content, in a different template's look
+  "restyle"   the whole deck's content, moved onto a DIFFERENT template. Restyling or
+              redesigning a particular slide inside the deck it is in ("restyle slide 3",
+              "make this slide look different") is "edit", not "restyle"
   "ask"       you cannot tell; ask one short question
 
 Output JSON:
@@ -65,6 +67,9 @@ Output JSON: {"actions": [...]} where each action is one of
   {"action": "relayout_cards", "slide": <1-based number>, "columns": <how many across>,
    "cards": [{"from": [<the numbers of the existing cards this one replaces>],
               "heading": "...", "body": "..."}]}
+
+A request to "restyle" or "redesign" a particular slide asks for a different look, not
+different words: answer it with `change_layout` and/or `set_style`, never `set_text`.
 
 `change_layout` keeps a slide's words exactly as they are and puts them into a *different*
 layout from the same template - the answer to "this slide looks repetitive" or "can we lay this

@@ -129,3 +129,50 @@ def test_a_model_is_only_consulted_when_the_rules_are_unsure(offline_settings):
     unsure["deck_versions"] = ["s3://b/v001.pptx"]
     assert route(unsure, planner=Counting())["route_by"] == "model"
     assert len(calls) == 1
+
+
+# --------------------------------------------------------------------------- restyle: one slide vs the deck
+
+@pytest.mark.parametrize("request_text, slides", [
+    ("restyle slide 3", [3]),
+    ("restyle slide 3 to look like slide 5", [3]),
+    ("restyle slides 2-4", [2, 3, 4]),
+    ("redesign slide 4, it looks dated", [4]),
+])
+def test_restyling_a_slide_is_an_edit(request_text, slides):
+    """One slide looking different, inside the template it already uses, is an edit.
+
+    It used to be treated as moving the whole deck onto another template and declined, with
+    the slide number thrown away. The edit route can already do it: change_layout, set_style.
+    """
+    answer = rules_route(request_text, HAS_DECK)
+    if "redesign" in request_text:
+        # not a restyle word; it reaches edit through the slide number. Either way: edit.
+        assert answer["route"] == "edit"
+        return
+    assert answer["route"] == "edit"
+    assert answer["slides"] == slides
+    assert answer["confidence"] >= 0.6, "a named slide is a confident edit"
+
+
+def test_restyling_this_slide_without_a_number_is_unsure():
+    """"This slide" names no slide, so the rules should not guess which one."""
+    answer = rules_route("restyle this slide", HAS_DECK)
+    assert answer["route"] == "edit"
+    assert answer["confidence"] < 0.6, "below the floor, so a model or the person decides"
+
+
+@pytest.mark.parametrize("request_text", [
+    "restyle the deck onto the new corporate template",
+    "restyle this onto our brand",
+    "put this into the new corporate template",
+    "restyle slides 2-4 onto the new template",
+])
+def test_moving_onto_another_template_is_still_a_restyle(request_text):
+    """The deck-level job is the one that genuinely is not built, and still says so."""
+    assert rules_route(request_text, HAS_DECK)["route"] == "restyle"
+
+
+def test_a_restyle_keeps_the_slide_numbers_it_was_given():
+    answer = rules_route("restyle slides 2-4 onto the new template", HAS_DECK)
+    assert answer["slides"] == [2, 3, 4]
