@@ -154,13 +154,25 @@ def cmd_kit(args) -> int:
     template_id = sha256_file(template)
     workdir = s.workspace_root / f"kit-{template_id}"
     kit, report = build_kit(template, workdir, make_planner(s), render=render)
-    uri = store().put_json(kit, kit_key(template_id))
+
+    # A kit with no patterns is a *failure*, not a result, and caching it would be worse than
+    # not caching anything: the cache is keyed by the template's content hash, so the same
+    # template would keep getting the empty answer back for ever - including after the reason
+    # it failed has been fixed. `ensure_kit` already declines rather than caching; this is the
+    # command-line path catching up with it.
+    uri = None
+    if kit["patterns"]:
+        uri = store().put_json(kit, kit_key(template_id))
     if args.out:
         Path(args.out).write_text(json.dumps(kit, indent=1))
     _p({"template_id": template_id, "kit": uri, "patterns": sorted(kit["patterns"]),
         "capacity": report.get("capacity"),
         "dropped": {n: r.get("reasons") for n, r in report["patterns"].items()
                     if not n.startswith("_") and not r.get("passed")}})
+    if not kit["patterns"]:
+        print("\nNo usable layouts: this template was not cached, and no deck can be built "
+              "from it yet. The reasons above are per pattern.")
+        return 1
     return 0
 
 

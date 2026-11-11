@@ -169,3 +169,27 @@ def test_every_run_leaves_a_manifest_that_explains_it(offline_settings, uploaded
     assert manifest["kit"] and manifest["template_id"]
     assert [entry["node"] for entry in manifest["trace"]][:3] == ["intake", "route", "ensure_kit"]
     assert manifest["settings"]["render_backend"] == "off"
+
+
+def test_a_template_with_no_usable_layouts_is_not_cached(offline_settings, uploaded_template, planner):
+    """Caching a failure is worse than caching nothing.
+
+    The cache is keyed by the template's content hash, so an empty kit written there would be
+    handed back for ever - including after the reason it failed has been fixed. A real
+    commercial template produced exactly this: zero patterns, and an empty kit cached under its
+    hash until it was deleted by hand.
+    """
+    import deck_agent.nodes.kit as kit_node
+
+    original = kit_node.build_kit
+    kit_node.build_kit = lambda *a, **k: ({"name": "x", "patterns": {}}, {"draft_notes": "none"})
+    try:
+        out = kit_node.ensure_kit({"thread_id": "t", "run_id": "r", "template": uploaded_template},
+                                  planner=planner, log=lambda *a, **k: None)
+    finally:
+        kit_node.build_kit = original
+
+    assert out["route"] == "decline"
+    assert "kit" not in out, "a kit with no patterns must not be recorded as this deck's kit"
+    assert store().list("kits/") == [], "nothing should have been cached"
+    assert out["errors"][0]["kind"] == "no_patterns"
