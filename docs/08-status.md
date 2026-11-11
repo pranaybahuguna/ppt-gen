@@ -197,7 +197,7 @@ On that same commercial template, with nothing else changed:
 |---|---|---|
 | candidate slides drafted | 1 | 17 |
 | distinct slide kinds | 1 | 6 |
-| **patterns accepted** | **0** | **5** - cover, columns, panels, stats, text |
+| **patterns accepted** | **0** | **6** - cover, cards, columns, panels, stats, text |
 | decoration kept | - | logo, cover photograph, icons, tick marks |
 | decks buildable | none | yes, 0 findings, 0 leaked content |
 

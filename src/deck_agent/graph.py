@@ -156,7 +156,7 @@ def build_graph(planner=None, log=print) -> StateGraph:
     g.add_conditional_edges("edit_plan", after_edit_plan, ["edit_apply", "ask", "decline"])
     g.add_edge("edit_apply", "look")
 
-    g.add_conditional_edges("custom_code", nodes.after_code, ["deliver"])
+    g.add_conditional_edges("custom_code", nodes.after_code, ["deliver", "repair"])
     g.add_edge("deliver", END)
     g.add_edge("decline", END)
     return g

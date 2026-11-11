@@ -106,6 +106,63 @@ def _encloses(outer: dict, inner: dict, slack: int = 45720) -> bool:
             and (a["w"] * a["h"]) > (b["w"] * b["h"]))
 
 
+def _bbox(geoms):
+    xs = [g["x"] for g in geoms]
+    ys = [g["y"] for g in geoms]
+    return (min(xs), min(ys),
+            max(g["x"] + g["w"] for g in geoms), max(g["y"] + g["h"] for g in geoms))
+
+
+def _inside(shape_geom, box, slack: int = 45720) -> bool:
+    x0, y0, x1, y1 = box
+    g = shape_geom
+    return (g["x"] >= x0 - slack and g["y"] >= y0 - slack
+            and g["x"] + g["w"] <= x1 + slack and g["y"] + g["h"] <= y1 + slack)
+
+
+def unused_item_steps(pattern: dict, example_slide: dict, used_items: int,
+                      claimed: set[int]) -> list[dict]:
+    """Delete decoration that belonged to item slots this slide did not fill.
+
+    A pattern's example slide shows some number of items, and a slide using fewer leaves the
+    rest behind. The compiler removes the *item groups* it does not need, but a template's
+    decoration is rarely all inside those groups: a tick mark under each card, a rule beneath
+    each column, a connector between them. Those are separate shapes that sit in the item's
+    area, and they survive - so a slide with three of four items shows three cards and four
+    tick marks.
+
+    It is obvious to look at and invisible to every other check, which is how it was found: the
+    vision review said "four checkmark markers and underline rules remain with no accompanying
+    content". The rule is the same conservative shape as the one above - a shape with no text,
+    claimed by nothing, lying inside the area an unused item would have occupied.
+    """
+    if "items" not in pattern:
+        return []
+    groups = pattern["items"]["groups"]
+    if used_items >= len(groups):
+        return []
+
+    shapes = {int(s["ref"].rsplit("shape:", 1)[1]): s for s in example_slide["shapes"]}
+    dropped = [sid for group in groups[used_items:] for sid in group]
+    geoms = [shapes[sid]["geom"] for sid in dropped if sid in shapes and shapes[sid].get("geom")]
+    if not geoms:
+        return []
+    box = _bbox(geoms)
+    kept_item_ids = {sid for group in groups[:used_items] for sid in group}
+
+    steps = []
+    for sid, shape in shapes.items():
+        if sid in claimed or sid in kept_item_ids or sid in dropped:
+            continue
+        if shape.get("kind") == "group" or not shape.get("geom"):
+            continue
+        if any(p["text"].strip() for p in shape.get("paras", [])):
+            continue                       # it has words; the leak guard decides about those
+        if _inside(shape["geom"], box):
+            steps.append({"op": "delete_shape", "target": f"shape:{sid}"})
+    return steps
+
+
 def orphan_steps(pattern: dict, example_slide: dict, filled: set[int]) -> list[dict]:
     """Extra `delete_shape` steps for decoration whose every field was left empty.
 
@@ -146,11 +203,24 @@ def remove_orphans(ops: list[dict], plan: dict, index: dict, kit: dict) -> tuple
         example = index["slides"][pattern["slide"] - 1]
         filled = _filled_ids(plan_slide, pattern)
         existing = {s.get("target") for s in op.get("steps", []) if s.get("op") == "delete_shape"}
-        for step in orphan_steps(pattern, example, filled):
+        claimed = _claimed_ids(pattern)
+        extra = orphan_steps(pattern, example, filled) + unused_item_steps(
+            pattern, example, len(plan_slide.get("items") or []), claimed)
+        for step in extra:
             if step["target"] not in existing:
+                existing.add(step["target"])
                 op.setdefault("steps", []).append(step)
                 added += 1
     return ops, added
+
+
+def _claimed_ids(pattern: dict) -> set[int]:
+    """Every shape id the pattern names for something, whether or not this slide fills it."""
+    out = set(pattern["fields"].values()) | set(pattern.get("keep", []))
+    out |= set(pattern.get("charts", {}).values())
+    if "table" in pattern:
+        out.add(pattern["table"].get("shape"))
+    return out
 
 
 def _filled_ids(plan_slide: dict, pattern: dict) -> set[int]:

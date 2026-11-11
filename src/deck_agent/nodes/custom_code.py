@@ -157,10 +157,14 @@ def custom_code(state: DeckState, planner=None, log=print) -> dict:
         "changelog": [*(state.get("changelog") or []),
                       *[{"change": "drew a slide with generated code", "slide": m["slide"],
                          "explanation": m["explanation"]} for m in made]],
+        # Only the slides this node actually drew. `without_page_number` also lists slides
+        # whose page number is not of the form "n / total" - this template numbers them with a
+        # bare figure in a coloured square - and calling those "drawn by generated code" was
+        # both wrong and alarming.
         "vision_notes": [*(state.get("vision_notes") or []),
-                         *([f"slide {n} has no page number: it was drawn by generated code, "
-                            "which has no page-number box to fill"
-                            for n in pages["without_page_number"]])],
+                         *([f"slide {m['slide']} has no page number: it was drawn by generated "
+                            "code, which has no page-number box to fill"
+                            for m in made if m["slide"] in pages["without_page_number"]])],
         "errors": ([{"kind": "no_fit", "message":
                      f"{len(still_pending)} slide(s) could not be drawn either",
                      "detail": [p["content"].get("title") for p in still_pending]}]
@@ -185,4 +189,16 @@ def _as_feedback(report: dict) -> list[str]:
 
 
 def after_code(state: DeckState) -> str:
+    """Back to the normal decision, not straight out of the door.
+
+    The escape hatch sits between `assemble` and `deliver`, and returning "deliver"
+    unconditionally meant anything still wrong with the deck skipped the repair loop entirely.
+    A deck went out with four problems a vision model had just named, none of them looked at
+    again, because one slide happened to need a custom layout and the hatch was switched off.
+    """
+    from ..settings import settings as _settings
+
+    s = _settings()
+    if state.get("findings") and state.get("repair_round", 0) < s.max_repair_rounds:
+        return "repair"
     return "deliver"

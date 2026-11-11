@@ -48,6 +48,7 @@ beat guessing.
 | `autokit.py` | `leaves()` opens groups up, `S` converts geometry, and a slide with groups is no longer skipped (a slide with a real chart still is) |
 | `executor.py` | `set_geometry` converts back into the shape's own space before writing; a shape duplicated *out of* a group has its geometry rewritten into slide space, because the copy is appended to the slide |
 | `autokit.py` | what counts as *decoration* - a picture that comes with the layout rather than content on an example slide |
+| `kit_check.py` | placeholder text is *at most* the example's length, not a word longer |
 | `patterns.py` | a picture the pattern itself uses is not a leak — with groups usable, an item is routinely "icon + heading + body" and the icon is meant to be copied once per item |
 
 **Which pictures a layout keeps.** The original test was frequency alone: a picture on at
@@ -65,6 +66,15 @@ inch, the content photographs 3-6 inch), or it **bleeds** off the edge of the sl
 still removed is a picture of real size, inside the page, appearing once - the screenshot or
 diagram the rule was written for, and the one in the engine's own leak test, which still fails
 the way it should. On this template that took acceptance from 3 patterns to 5.
+
+**Placeholder text that answers the question actually asked.** The acceptance test asks
+whether a pattern holds content like its example's, and built that content with `dummy()`,
+which appended whole words until it *passed* the requested length - overshooting by up to a
+word. On long body text that is nothing; on a short string it is a third more. A 12-character
+title came back as 16, which tipped a one-line heading box onto a second line, and the layout
+was dropped for an overflow it does not have. `dummy()` now stops before exceeding the length.
+The capacity measurement still asks for 15% more on purpose, by passing `stretch`, so that
+stays deliberate rather than accidental. This took acceptance from 5 patterns to 6.
 
 **One judgement call worth review.** The same patch stops an *embedded object* from blocking a
 slide being copied. `_NO_CLONE` listed charts, SmartArt and OLE together; `clone_slide` shares
