@@ -66,6 +66,19 @@ make demo
 .venv/bin/python -m deck_agent.cli kit corporate.pptx --out kit.json
 ```
 
+**Ingesting a template** is that one command. It prepares the file first (making nested shape
+ids unique, which real templates often need and the engine cannot work around), drafts a
+pattern per usable slide, checks every id, renders the slides, has a vision model label the
+boxes, builds test decks to accept or reject each pattern, and measures how many items each
+one really holds. It prints what passed and what was dropped, with the reason for each.
+
+If preparation changed anything it writes `<name>-prepared.pptx` beside the kit and names it
+as `use_this_template`. **Use that file from then on**: a kit addresses shapes by id, so it
+only makes sense against the copy it was built from. A template that needed no preparation
+comes through byte-identical and keeps its own name and hash.
+
+A template that yields no patterns is not cached, and says so.
+
 Every command prints the same JSON shape the host application receives.
 
 ## From a host application

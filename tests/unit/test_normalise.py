@@ -107,3 +107,41 @@ def test_embedded_parts_are_byte_identical(deck_with_a_duplicate, tmp_path):
     for name in media:
         assert name in after.namelist(), f"{name} was dropped"
         assert before.read(name) == after.read(name), f"{name} was rewritten"
+
+
+# --------------------------------------------------------------------------- prepare()
+
+def test_preparing_a_clean_template_is_a_byte_copy(sample_deck, tmp_path):
+    """The cache key is the template's content hash.
+
+    Round-tripping a clean template through python-pptx changes the zip container even when
+    every part survives, so its hash would change and it would be learned again every single
+    time. A template that needs nothing must come through untouched.
+    """
+    from deck_agent.engine.normalise import prepare
+
+    out = tmp_path / "prepared.pptx"
+    report = prepare(sample_deck, out)
+    assert report["changed"] is False
+    assert out.read_bytes() == sample_deck.read_bytes()
+
+
+def test_preparing_is_idempotent(deck_with_a_duplicate, tmp_path):
+    """Preparing an already-prepared template must be a no-op, hash included."""
+    from deck_agent.engine.normalise import prepare
+
+    once, twice = tmp_path / "1.pptx", tmp_path / "2.pptx"
+    first = prepare(deck_with_a_duplicate, once)
+    second = prepare(once, twice)
+
+    assert first["changed"] is True and first["ids_renumbered"] >= 1
+    assert second["changed"] is False
+    assert once.read_bytes() == twice.read_bytes()
+
+
+def test_prepare_reports_what_it_found(deck_with_a_duplicate, tmp_path):
+    from deck_agent.engine.normalise import prepare
+
+    report = prepare(deck_with_a_duplicate, tmp_path / "out.pptx")
+    assert report["duplicate_ids_before"], "a caller should be able to see what was wrong"
+    assert report["slides_touched"]

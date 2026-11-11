@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from ..engine.deck import probe
 from ..engine.kitbuild import build_kit
+from ..engine.normalise import prepare
 from ..infra.storage import store
 from ..settings import settings
 from ..state import DeckState, step
@@ -38,8 +39,20 @@ def ensure_kit(state: DeckState, planner=None, log=print) -> dict:
         }
 
     with workspace(state) as ws:
-        local = ws.fetch(template, "template.pptx")
-        template_id = state.get("template_id") or template_fingerprint(local)
+        raw = ws.fetch(template, "raw.pptx")
+
+        # Prepare the template before anything reads an id off it. A real template can carry
+        # duplicate shape ids - add-ins leave them behind - and the engine refuses those slides,
+        # correctly, because its addressing cannot tell two shapes with one id apart. The
+        # prepared copy becomes *the* template: the kit addresses its ids, so decks must be
+        # built from the same file, and its hash is the cache key.
+        local = ws.path("template.pptx")
+        prepared = prepare(raw, local)
+        if prepared["changed"]:
+            log(f"  template: made {prepared['ids_renumbered']} nested shape id(s) unique on "
+                f"slides {prepared['slides_touched']}; the engine could not have used them")
+            template = ws.publish("template.pptx", versioned=True)
+        template_id = template_fingerprint(local)
         cached = f"s3://{st.bucket}/{kit_key(template_id)}"
 
         if state.get("kit") and state.get("template_id") == template_id:

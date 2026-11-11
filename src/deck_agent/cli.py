@@ -147,12 +147,26 @@ def cmd_kit(args) -> int:
     from .infra.storage import sha256_file
     from .sandbox.render import render
 
+    from .engine.normalise import prepare  # noqa: PLC0415
+
     s = settings()
-    template = Path(args.template)
-    if not template.exists():
-        sys.exit(f"no such template: {template}")
+    source = Path(args.template)
+    if not source.exists():
+        sys.exit(f"no such template: {source}")
+
+    # Prepare it first; the prepared copy is what the kit addresses, so it is what decks must
+    # be built from. When nothing needed changing the bytes come through unchanged, so the
+    # template keeps its own hash and its own file.
+    workdir = s.workspace_root / f"kit-{sha256_file(source)}"
+    workdir.mkdir(parents=True, exist_ok=True)
+    prepared_path = workdir / "prepared.pptx"
+    prepared = prepare(source, prepared_path)
+    template = prepared_path if prepared["changed"] else source
+    if prepared["changed"]:
+        print(f"prepared the template: {prepared['ids_renumbered']} nested shape id(s) made "
+              f"unique on slides {prepared['slides_touched']}, which the engine could not "
+              "otherwise have used")
     template_id = sha256_file(template)
-    workdir = s.workspace_root / f"kit-{template_id}"
     kit, report = build_kit(template, workdir, make_planner(s), render=render)
 
     # A kit with no patterns is a *failure*, not a result, and caching it would be worse than
@@ -165,7 +179,14 @@ def cmd_kit(args) -> int:
         uri = store().put_json(kit, kit_key(template_id))
     if args.out:
         Path(args.out).write_text(json.dumps(kit, indent=1))
-    _p({"template_id": template_id, "kit": uri, "patterns": sorted(kit["patterns"]),
+    beside = None
+    if prepared["changed"] and kit["patterns"]:
+        # The kit refers to this file's ids, so hand it over explicitly rather than leaving it
+        # in a scratch directory the caller does not know about.
+        beside = Path(args.out or "kit.json").with_name(source.stem + "-prepared.pptx")
+        beside.write_bytes(prepared_path.read_bytes())
+    _p({"template_id": template_id, "kit": uri, "use_this_template": str(beside) if beside else str(source),
+        "patterns": sorted(kit["patterns"]),
         "capacity": report.get("capacity"),
         "dropped": {n: r.get("reasons") for n, r in report["patterns"].items()
                     if not n.startswith("_") and not r.get("passed")}})

@@ -207,7 +207,11 @@ def _vision_compare(result, owner, report, planner, example_pngs, workdir, log) 
         return f"not run ({shots.skipped})"
     by_index = {int(p.stem.split("-")[1]) - 1: p for p in shots.previews}
     for i, name in enumerate(owner):
-        if i % 2 == 0 or not report[name]["passed"] or i not in by_index:
+        # A pattern with no picture of its example slide cannot be compared with one. That is a
+        # missing input, not a failure of the pattern, and dropping it on those grounds would
+        # be wrong - it showed up as "vision check failed: KeyError".
+        if i % 2 == 0 or not report[name]["passed"] or i not in by_index \
+                or name not in example_pngs:
             continue
         try:
             verdict = planner.compare_slides(example_pngs[name], by_index[i].read_bytes())

@@ -149,3 +149,36 @@ def _is_top_level(cNvPr, tree) -> bool:
 # for shapes nested in groups - `_shape_entries` already recurses into them and gives each one
 # an addressable ref, so only the coordinates are wrong. That leaves the template untouched,
 # which is the part this experiment got wrong.
+
+
+# --------------------------------------------------------------------------- the entry point
+
+def prepare(src: str | Path, dst: str | Path) -> dict:
+    """Everything a template needs before a kit can be built from it. -> a report.
+
+    One call, so that ingesting a template is a single documented step rather than a sequence
+    somebody has to remember. Today that is only the shape-id pass; anything else that turns
+    out to be needed belongs here, where it happens once, before the ids the kit will refer to
+    are read.
+
+    **The result is the template from now on.** A kit addresses shapes by id, so a kit built
+    from the prepared copy only makes sense against that copy. Callers upload it and use its
+    hash as the cache key - which also means a template that needed no preparation keeps its
+    original hash, because the bytes come through unchanged.
+    """
+    problems = shape_id_problems(src)
+    if not problems:
+        # Nothing to do, so copy the bytes rather than round-tripping through python-pptx.
+        # That matters for more than speed: the cache key is the template's content hash, and
+        # a rewrite changes the zip container even when every part survives - so an already
+        # clean template would get a new hash, and be learned again, every single time.
+        import shutil
+
+        shutil.copy(str(src), str(dst))
+        return {"slides_touched": [], "ids_renumbered": 0, "renumbered_top_level_shapes": 0,
+                "top_level_collisions": [], "changes": [], "parts": {},
+                "duplicate_ids_before": {}, "changed": False}
+    report = unique_shape_ids(src, dst)
+    report["duplicate_ids_before"] = {str(k): v for k, v in problems.items()}
+    report["changed"] = report["ids_renumbered"] > 0
+    return report
