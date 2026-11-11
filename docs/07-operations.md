@@ -157,8 +157,12 @@ What is here is a development stack. For a real deployment:
   the decks they refer to.
 * **Workers**: the agent is stateless between turns - everything is in the checkpoint and the
   bucket - so run several. Nothing in this design assumes a single process.
-* **Cleanup**: `local/workspaces` is scratch and safe to delete at any time. Nothing of record
-  is there.
+* **Cleanup**: `make clean-scratch` removes run output from `local/` - workspaces, rendered
+  previews, downloaded artefacts - and keeps the three things that are depended on: the fonts
+  the overflow predictor measures with, the sample decks the tests use, and `local/templates`,
+  where a prepared template and its kit live. A kit addresses shapes by id, so the file it was
+  built from is not scrap. Nothing of record is in `local/` at all; it is all in object
+  storage.
 * **If decks arrive from outside the organisation**, read the "what is given up" section of
   `docs/01-why-one-process.md` and consider running the whole agent as the untrusted thing:
   one short-lived worker per request.

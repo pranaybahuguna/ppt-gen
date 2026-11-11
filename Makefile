@@ -84,6 +84,22 @@ destroy-data:  ## stop them and delete the volumes: every deck and every checkpo
 logs:  ## follow the services' logs
 	$(COMPOSE) logs -f
 
+# `local/` is scratch, but not all of it. Three things in there are depended on and are NOT
+# removed: the metric-compatible fonts the overflow predictor measures with (`make fonts`),
+# the sample decks the tests use (`make samples`), and anything under local/templates, which
+# is where a prepared template and its kit live - a kit addresses shapes by id, so the file it
+# was built from is not scrap. Everything else is run output and can go at any time; nothing
+# of record is kept outside object storage.
+.PHONY: clean-scratch
+clean-scratch:  ## delete run output from local/, keeping fonts, samples and templates
+	@before=$$(du -sk local 2>/dev/null | cut -f1); \
+	rm -rf local/workspaces local/out local/renders; \
+	rm -f local/image-build.log; \
+	mkdir -p local/workspaces; \
+	after=$$(du -sk local 2>/dev/null | cut -f1); \
+	echo "local/ is now $$(du -sh local | cut -f1) (freed $$(( (before - after) / 1024 )) MB)"; \
+	echo "kept: $$(ls local)"
+
 .PHONY: init
 init:  ## create the checkpoint tables and the bucket
 	$(PY) -m deck_agent.cli init
