@@ -30,6 +30,7 @@ from __future__ import annotations
 import copy
 from pathlib import Path
 
+from ..errors import Boundary, PlanInvalid, Refused
 from . import bootstrap
 from .build import baseline_for_kit, build_from_kit, compile_plan
 from .deck import probe
@@ -159,8 +160,25 @@ def accept(template: str | Path, index: dict, kit: dict, workdir: Path,
 
     if plan_slides:
         plan = {"footer": FOOTER, "slides": plan_slides}
-        result = build_from_kit(template, index, kit, plan, TEST_CONTENT,
-                                workdir / "acceptance.pptx", baseline_for_kit(template, kit))
+        try:
+            result = build_from_kit(template, index, kit, plan, TEST_CONTENT,
+                                    workdir / "acceptance.pptx", baseline_for_kit(template, kit))
+        except (Refused, Boundary, PlanInvalid) as e:
+            # The whole point of the acceptance test is that a pattern which cannot be built
+            # gets dropped with a reason. A refusal from the engine is that answer arriving in
+            # the form of an exception, and it must not take the kit build down with it: a
+            # template where every pattern fails should end with an empty kit and an
+            # explanation, not a traceback.
+            reasons = [str(e)] + [str(d) for d in (e.detail or [])][:3]
+            for name in set(owner):
+                report[name]["passed"] = False
+                report[name]["reasons"] += reasons
+            final = copy.deepcopy(kit)
+            final["patterns"] = {}
+            final.pop("draft", None)
+            report["_test_deck"] = None
+            report["_vision_check"] = "not run (no test deck was built)"
+            return final, report
         for f in result.findings:
             r = report[owner[f["slide_index"]]]
             r["passed"] = False
@@ -239,9 +257,16 @@ def capacity(template: str | Path, index: dict, kit: dict, workdir: Path,
             owner.append((name, n))
 
     if slides:
-        result = build_from_kit(template, index, trial, {"footer": FOOTER, "slides": slides},
-                                TEST_CONTENT, workdir / "capacity.pptx",
-                                baseline_for_kit(template, trial))
+        try:
+            result = build_from_kit(template, index, trial, {"footer": FOOTER, "slides": slides},
+                                    TEST_CONTENT, workdir / "capacity.pptx",
+                                    baseline_for_kit(template, trial))
+        except (Refused, Boundary, PlanInvalid) as e:
+            # Measuring failed, so nothing is learned and nothing is claimed: every pattern
+            # keeps the count its example slide shows, which is the conservative direction.
+            for name, r in report.items():
+                r["first_failure"] = f"could not be measured: {e}"
+            return kit, report
         bad: dict[str, set[int]] = {}
         for f in result.findings:
             name, n = owner[f["slide_index"]]

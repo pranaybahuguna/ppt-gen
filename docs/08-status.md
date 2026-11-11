@@ -159,9 +159,42 @@ layouts are used instead, exactly as before.
 The alternative - copying the template's example slide into the deck, a cross-file slide copy -
 is still not built, and would be the way to do this without a rebuild.
 
+## What a real commercial template did
+
+The first one tried - a bought "Challenges and Solutions" deck, 24 MB, 20 slides, 52-131 shapes
+a slide - produced **zero usable patterns**. The ingestion is automatic and said so clearly;
+what it found was three independent blockers, in this order:
+
+1. **Duplicate shape ids on 15 of 20 slides.** Refused, correctly: the engine addresses
+   `slide:<id>/shape:<id>` and two shapes with one id cannot be told apart. But every duplicate
+   was *inside an embedded think-cell object*, and among the top-level shapes - the only ones
+   the engine touches - there were none. `engine/normalise.py` renumbers those nested ids and
+   leaves every top-level id alone; verified on this template with all 18 OLE objects and all
+   27 embedded parts byte-identical, and all text and geometry unchanged.
+2. **Grouped shapes on 19 of 20 slides.** This is the real blocker and it is not fixed. A shape
+   inside a group reports its position in the group's own coordinate space, so the geometry the
+   drafting rules reason about is meaningless and they skip the slide. Flattening the groups was
+   tried and rejected - see the note in `engine/normalise.py` for why, and for where the fix
+   belongs (`probe`, emitting slide-space geometry for nested shapes, which is a small change
+   to the engine and leaves the template untouched).
+3. **An embedded object on the one slide that survived.** The executor will not clone a slide
+   holding a chart, SmartArt or an OLE object, so even the cover was dropped by the acceptance
+   test.
+
+Two things were fixed by trying: the kit build used to **crash** with an unhandled `Refused`
+when a pattern could not be built, instead of dropping that pattern with a reason - the whole
+point of an acceptance test - and the duplicate-id normalisation above.
+
+The honest summary: **group support is what stands between this project and most commercial
+templates.** It is one well-defined change in the engine, and it is the next thing to do.
+
 ## Still missing, in the order worth doing
 
-1. **Facts enforcement.** The content pack is given and cited, but no number on a slide is
+1. **Group support in `probe`.** Emit slide-space geometry for shapes nested in groups;
+   `_shape_entries` already recurses into them and gives each an addressable ref, so only the
+   coordinates are wrong. Then the drafting rules can stop skipping those slides.
+   *Done:* a commercial template with grouped icon-and-text cards yields usable patterns.
+2. **Facts enforcement.** The content pack is given and cited, but no number on a slide is
    checked against the fact it cites. Stripping citation markers improved the look, not the
    truth. *Done* means an invented number is rejected and the slide re-rendered.
 2. **Structured output per slide.** Build a JSON schema from the options (pattern enum, allowed
