@@ -18,9 +18,26 @@ setup: engine venv image fonts samples  ## everything needed to run, from a fres
 	@echo; echo "now: make up && make init && make doctor"
 
 .PHONY: engine
-engine:  ## clone the deckops engine (used unmodified)
+engine:  ## clone the deckops engine and apply this project's patches
 	@test -d engine/deckops/.git || git clone $(ENGINE_REPO) engine/deckops
 	@cd engine/deckops && git rev-parse --short HEAD | sed 's/^/engine at /'
+	@$(MAKE) --no-print-directory engine-patch
+
+.PHONY: engine-patch
+engine-patch:  ## apply patches/*.patch to the engine clone (idempotent)
+	@for p in patches/*.patch; do \
+		if git -C engine/deckops apply --check "$(CURDIR)/$$p" 2>/dev/null; then \
+			git -C engine/deckops apply "$(CURDIR)/$$p" && echo "applied $$p"; \
+		elif git -C engine/deckops apply --reverse --check "$(CURDIR)/$$p" 2>/dev/null; then \
+			echo "already applied $$p"; \
+		else \
+			echo "COULD NOT APPLY $$p - see patches/README.md"; exit 1; \
+		fi; \
+	done
+
+.PHONY: engine-reset
+engine-reset:  ## drop the patches, returning the engine clone to upstream
+	git -C engine/deckops checkout -- .
 
 .PHONY: venv
 venv:  ## create the virtualenv and install dependencies

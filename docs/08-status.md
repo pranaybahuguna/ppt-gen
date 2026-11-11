@@ -171,7 +171,7 @@ what it found was three independent blockers, in this order:
    the engine touches - there were none. `engine/normalise.py` renumbers those nested ids and
    leaves every top-level id alone; verified on this template with all 18 OLE objects and all
    27 embedded parts byte-identical, and all text and geometry unchanged.
-2. **Grouped shapes on 19 of 20 slides.** This is the real blocker and it is not fixed. A shape
+2. **Grouped shapes on 19 of 20 slides.** **Now fixed** - see below. A shape
    inside a group reports its position in the group's own coordinate space, so the geometry the
    drafting rules reason about is meaningless and they skip the slide. Flattening the groups was
    tried and rejected - see the note in `engine/normalise.py` for why, and for where the fix
@@ -185,8 +185,33 @@ Two things were fixed by trying: the kit build used to **crash** with an unhandl
 when a pattern could not be built, instead of dropping that pattern with a reason - the whole
 point of an acceptance test - and the duplicate-id normalisation above.
 
-The honest summary: **group support is what stands between this project and most commercial
-templates.** It is one well-defined change in the engine, and it is the next thing to do.
+## Group support, and what it unlocked
+
+Group support is in, as `patches/0001-group-support.patch` - the first and so far only change
+to the engine, because it is the one thing composition could not reach: the rules deciding
+whether a slide can become a layout live inside the engine and read the file themselves.
+
+On that same commercial template, with nothing else changed:
+
+| | before | after |
+|---|---|---|
+| candidate slides drafted | 1 | 17 |
+| distinct slide kinds | 1 | 6 |
+| **patterns accepted** | **0** | **5** - cover, columns, panels, stats, text |
+| decks buildable | none | yes, 0 findings, 0 leaked content |
+
+Three slides are still skipped, each holding a real chart, which remains out of scope.
+
+Getting there took four things, and each was a separate wrong assumption:
+
+* slide-space geometry for nested shapes, so the pattern rules compare like with like;
+* writing a position *back* into a nested shape's own space, and rewriting a shape's geometry
+  when it is duplicated out of a group onto the slide;
+* an embedded object no longer blocking a slide from being copied - commercial decks park
+  add-in data (think-cell) on every slide, and treating that like a chart refused whole
+  templates. Charts and SmartArt still block copying, and the object is dropped from the copy;
+* a picture the pattern itself uses is no longer counted as a leak, because with groups usable
+  an item is routinely "icon + heading + body" and the icon is meant to be copied per item.
 
 ## Still missing, in the order worth doing
 
