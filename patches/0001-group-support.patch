@@ -1,5 +1,5 @@
 diff --git a/deckops/autokit.py b/deckops/autokit.py
-index 44ca06f..b098379 100644
+index 44ca06f..40a775d 100644
 --- a/deckops/autokit.py
 +++ b/deckops/autokit.py
 @@ -30,6 +30,8 @@ from pptx.enum.shapes import MSO_SHAPE_TYPE
@@ -64,6 +64,77 @@ index 44ca06f..b098379 100644
          return None, notes
      chrome = find_chrome(shapes, W, H)
      used = set(chrome.values())
+@@ -361,6 +384,46 @@ USE_FOR = {
+ }
+ 
+ 
++#: A picture thinner than this in either direction is an icon, a logo or a rule - decoration,
++#: whatever else is true of it. 0.8 inch: the logos and icons on real templates measure
++#: 0.34-0.77 inch, and the content photographs 3-6 inch.
++ICON_EMU = 731520
++
++
++def _decorative(sh, sha, often, W, H):
++    """Is this picture part of the template's look, rather than content on an example slide?
++
++    The question matters because a pattern copies its example slide: decoration has to come
++    with it, and content must not. Getting it wrong in one direction leaves somebody's
++    architecture diagram in every new deck; in the other it strips the logo, the icons and the
++    cover photograph and the slide stops looking like the template at all.
++
++    Frequency alone - "on at least half the slides" - was the original test, and it is right
++    about a logo repeated throughout. It is wrong about everything that appears once by design.
++    On a real commercial template it stripped the cover photograph, the logo, an icon inside a
++    circle and a row of tick marks, and the acceptance test's vision check caught each one by
++    name. So two more signals, both about what the picture *is* rather than how often it turns
++    up:
++
++    * **small** - an icon or a logo. Nothing that reads as content is a third of an inch tall.
++    * **bleeds** - it runs off the edge of the slide. Content sits inside the page; artwork
++      that runs past the trim is there to be looked through, not read.
++
++    What is still removed: a picture of real size, sitting inside the page, that appears once.
++    That is the screenshot or the diagram the rule was written for.
++    """
++    if sha in often:
++        return True
++    try:
++        x, y, w, h = to_slide(sh._element, int(sh.left or 0), int(sh.top or 0),
++                              int(sh.width or 0), int(sh.height or 0))
++    except Exception:
++        return False
++    if min(w, h) < ICON_EMU:
++        return True
++    return x < 0 or y < 0 or x + w > W or y + h > H
++
++
+ def _pic_sha(sh):
+     import hashlib
+     try:
+@@ -374,7 +437,8 @@ def draft_kit(path: str, template_name: str, dedupe: bool = True) -> dict:
+     # a picture that appears on at least half the slides is decoration (e.g. a logo); others are content
+     seen = Counter()
+     for slide in prs.slides:
+-        seen.update({_pic_sha(sh) for sh in slide.shapes if sh.shape_type == MSO_SHAPE_TYPE.PICTURE} - {None})
++        seen.update({_pic_sha(sh) for sh in leaves(slide.shapes)
++                     if sh.shape_type == MSO_SHAPE_TYPE.PICTURE} - {None})
+     decoration = {h for h, c in seen.items() if c >= max(2, len(prs.slides) / 2)}
+     W, H = prs.slide_width, prs.slide_height
+     total = len(prs.slides)
+@@ -386,8 +450,11 @@ def draft_kit(path: str, template_name: str, dedupe: bool = True) -> dict:
+         if not res:
+             continue
+         name, p = res
+-        keep = [sh.shape_id for sh in slide.shapes
+-                if sh.shape_type == MSO_SHAPE_TYPE.PICTURE and _pic_sha(sh) in decoration]
++        # `leaves`, not `slide.shapes`: once slides with groups can be patterns, the icons are
++        # inside the groups, and a picture that never reaches this list can never be kept.
++        keep = [sh.shape_id for sh in leaves(slide.shapes)
++                if sh.shape_type == MSO_SHAPE_TYPE.PICTURE
++                and _decorative(sh, _pic_sha(sh), decoration, W, H)]
+         if keep:
+             p["keep"] = keep
+         if "page" in p["fields"]:
 diff --git a/deckops/executor.py b/deckops/executor.py
 index b86f45b..e37e942 100644
 --- a/deckops/executor.py

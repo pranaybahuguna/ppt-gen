@@ -47,7 +47,24 @@ beat guessing.
 | `probe.py` | `_geom` reports slide coordinates, so everything downstream compares like with like |
 | `autokit.py` | `leaves()` opens groups up, `S` converts geometry, and a slide with groups is no longer skipped (a slide with a real chart still is) |
 | `executor.py` | `set_geometry` converts back into the shape's own space before writing; a shape duplicated *out of* a group has its geometry rewritten into slide space, because the copy is appended to the slide |
+| `autokit.py` | what counts as *decoration* - a picture that comes with the layout rather than content on an example slide |
 | `patterns.py` | a picture the pattern itself uses is not a leak — with groups usable, an item is routinely "icon + heading + body" and the icon is meant to be copied once per item |
+
+**Which pictures a layout keeps.** The original test was frequency alone: a picture on at
+least half the slides is decoration, everything else is content and is stripped from the copy.
+That is right about a logo repeated throughout and wrong about everything that appears once by
+design. On this template it stripped the cover photograph, the logo, an icon inside a circle
+and a row of tick marks, and the acceptance test's vision check named each one:
+
+> *"The large foreground photo of the person is missing, substantially changing the
+> composition."* · *"The four green checkmark icons above the lower text columns are missing."*
+
+Two more signals, both about what a picture *is* rather than how often it appears: it is
+**small** (under 0.8 inch in either direction - the logos and icons here measure 0.34-0.77
+inch, the content photographs 3-6 inch), or it **bleeds** off the edge of the slide. What is
+still removed is a picture of real size, inside the page, appearing once - the screenshot or
+diagram the rule was written for, and the one in the engine's own leak test, which still fails
+the way it should. On this template that took acceptance from 3 patterns to 5.
 
 **One judgement call worth review.** The same patch stops an *embedded object* from blocking a
 slide being copied. `_NO_CLONE` listed charts, SmartArt and OLE together; `clone_slide` shares
