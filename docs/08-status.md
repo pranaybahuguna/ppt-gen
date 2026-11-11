@@ -6,7 +6,8 @@ Honest, in the style of the handoff document this was built from.
 
 | Area | State | Notes |
 |---|---|---|
-| Single-process engine (probe, compile, apply, byte-preserving save, checks) | **Works** | No subprocess. 84 unit tests pass with nothing running |
+| Single-process engine (probe, compile, apply, byte-preserving save, checks) | **Works** | No subprocess. 244 unit tests pass with nothing running |
+| **Writing the deck's material from context** (`gather`) | **Works** | A request and a document in (`--context README.md`); facts out, each quote checked against the source |
 | Kit building in-process (draft → label → accept → measure capacity) | **Works** | 9/9 patterns accepted on the bundled template |
 | LangGraph `StateGraph`, 17 nodes, named decisions, trace | **Works** | `make graph` prints it from the code |
 | Postgres checkpointer, conversations across processes | **Works** | Tested across separate graph instances and pools |
@@ -17,22 +18,26 @@ Honest, in the style of the handoff document this was built from.
 | **General edit route** (set_text, delete, relayout_cards, insert_slide) | **Works** | The gap the handoff listed second. `insert_slide` now checks and repairs the slide it adds |
 | **Vision review** of every rendered slide, feeding the repair loop | **Works** | Off by default; 0 false alarms on a clean deck, found both real defects cold |
 | **Layout variety** across a deck | **Works** | Menus narrowed before stage 2, repetition caught after |
+| **Layout budget and reworked slides** | **Works** | Each template layout at most twice per deck; slides over it reworked by model-written code into one of twelve diagram types, in place, on the template's own header and footer. See docs/06 |
+| **Clean-up** (`deckops clean`, `ls`, `tidy_after_turn`) | **Works** | Files and conversations deleted together; dry run unless `--yes` |
+| **One kit at a time** (`single_kit`) | **Works** | Ingesting a template replaces the previous kit and its template |
 | **Layout change** (`change_layout`) | **Works** | Same words, a different layout from the deck's own; not for code-drawn slides |
 | **Visual changes** (`set_style`, `set_theme_colour`) | **Works** | Not in the engine's op language; a deterministic pass of its own, byte-preserving |
-| **Sandboxed code escape hatch**, resealed and checked | **Works** | Byte-identity of untouched slides asserted |
+| **Sandboxed model-written code** (reworked slides, and slides no layout holds), resealed and checked | **Works** | Byte-identity of untouched slides asserted; checked for fit, then looked at |
 | **No-fit fallback** (relaxed options before generated code) | **Works** | Partial - see below |
 | **Kit cache** by template content hash | **Works** | |
 | **Real-model validation** of every call | **Works** | 6/6 against `gpt-6.1-sol`, vision included |
 | Outline approval pause | **Built, off by default** | |
 | Restyle | **Declined, with a reason** | Recognised and refused rather than faked |
-| Picture slots, icons, diagrams | **Missing** | Unchanged from the engine |
-| Facts enforcement (numbers checked against cited facts) | **Missing** | Citation markers are now stripped from visible text, which is not the same thing |
+| Diagrams | **Works** | As reworked slides (above) |
+| Picture slots | **Missing** | Unchanged from the engine |
+| Facts enforcement (numbers checked against cited facts) | **Partial** | Facts gathered from context are checked against their source; numbers on a finished slide are not yet checked against the fact they cite |
 | Structured output (per-slide JSON schema) | **Missing** | JSON mode plus the compiler's retry loop |
 
 ## Measured
 
-**Tests.** 107 unit (no containers, no Postgres, no model), 18 integration (Docker, Postgres,
-S3), and the engine's own 28 still pass unmodified. `docs/09-testing.md` is honest about where
+**Tests.** 244 unit (no containers, no Postgres, no model), 19 integration (Docker, Postgres,
+S3), and the engine's own 28 still pass with this project's patch applied. `docs/09-testing.md` is honest about where
 the coverage is thin and about four things that were wrong until they were actually run.
 
 **The sandbox**, from inside itself:
@@ -214,13 +219,45 @@ Getting there took four things, and each was a separate wrong assumption:
 * a picture the pattern itself uses is no longer counted as a leak, because with groups usable
   an item is routinely "icon + heading + body" and the icon is meant to be copied per item.
 
+## Reworked slides, and a frame that did not work
+
+A twelve-slide deck from a six-layout template came out as the same three layouts over and
+over: only three of the six could hold that content, so reordering menus could not help. The
+answer was a **layout budget** - each layout at most twice per deck, never twice in a row - with
+the slides over it reworked by model-written code into a diagram (docs/06).
+
+The first version drew those slides on the bare slide layout, inserted them afterwards and
+moved them into place. Three defects followed, each found by looking at a built deck:
+
+* the slides had no header: this template draws its green band on each example slide, not on
+  the layout, so they looked pasted in from another deck;
+* repair read a slide's content by its position in the plan - and the plan, with those slides
+  missing, no longer lined up with the outline. One slide's words replaced another's;
+* a slide whose code failed was dropped, and its content with it.
+
+An empty "frame" slide kept in the template fixed the first two and brought three of its own -
+a title that ran off a half-width header picture onto white, an empty slide the vision review
+rightly called empty, a title too long for its band - none of them fixable by the code drawing
+the slide, so every attempt was spent on them. It was removed.
+
+What stands: the over-budget slide is built from its template layout like any other, and the
+code reworks it in place. It never leaves its position, its title and header are the
+template's, already checked and repaired, and if the rework fails it keeps its layout. On the
+README deck: 6 template slides, 6 reworked as six different diagrams, 5 of them first time.
+
+## Known issues
+
+* **Rendering a deck with hidden slides** maps slide numbers to PDF pages as if every slide
+  were visible, so previews of a template with hidden slides are offset. Built decks contain
+  none, so only template previews are affected.
+* **A template's own branding** - a vendor logo, footer text such as "Challenges PowerPoint
+  Templates" - is part of its look and is kept; the vision review notes it on every slide.
+* **A deck is only as current as its context.** It states what the document says, checked
+  against it, including anything in the document that is out of date.
+
 ## Still missing, in the order worth doing
 
-1. **Group support in `probe`.** Emit slide-space geometry for shapes nested in groups;
-   `_shape_entries` already recurses into them and gives each an addressable ref, so only the
-   coordinates are wrong. Then the drafting rules can stop skipping those slides.
-   *Done:* a commercial template with grouped icon-and-text cards yields usable patterns.
-2. **Facts enforcement.** The content pack is given and cited, but no number on a slide is
+1. **Facts enforcement.** The content pack is given and cited, but no number on a slide is
    checked against the fact it cites. Stripping citation markers improved the look, not the
    truth. *Done* means an invented number is rejected and the slide re-rendered.
 2. **Structured output per slide.** Build a JSON schema from the options (pattern enum, allowed
@@ -237,7 +274,8 @@ Getting there took four things, and each was a separate wrong assumption:
    image and the aspect ratio is checked.
 7. **Fewer items than the example** still stretch to fill the area and can look sparse (the
    engine's gap 10).
-8. **Checkpoint and artefact pruning.** Both accumulate for ever today.
+8. **An `add_item` edit action** - adding a card to a slide - which the edit route cannot do
+   yet. (Checkpoint and artefact pruning, previously listed here, is done: `deckops clean`.)
 9. **A recorded-response planner** so translate and edit have end-to-end tests that fail on a
    regression. Today they are verified by hand against a real model, which no test enforces.
 10. **Apply `relayout_cards` to a deck and look at it.** It compiles to 41 operations with a

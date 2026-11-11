@@ -30,7 +30,7 @@ from ..engine import bootstrap
 from ..engine.build import build_from_kit, baseline_for_kit, repair_feedback
 from ..engine.deck import probe
 from ..engine.fallback import relaxed_options
-from ..engine.variety import describe, repetitive, spread, without
+from ..engine.variety import assign_forms, budget, describe, repetitive, spread, without
 from ..errors import PlanInvalid
 from ..infra.storage import store
 from ..settings import settings
@@ -176,7 +176,30 @@ def render_slides(state: DeckState, planner=None, log=print) -> dict:
         if varied:
             log(f"  variety: {describe(varied)}")
 
+        # The layout budget. However the menu is shuffled, a template with six layouts will
+        # repeat across twelve slides when only three of them hold this kind of content. Past
+        # its budget a layout is not used *as it is* again: the slide is still built from it -
+        # with the template's title, header, footer and page number, and its content in place -
+        # and then reworked by code into a diagram suited to its content. If the rework fails,
+        # the slide keeps its template layout: a repeated layout, never a lost slide.
+        designed = []
+        if s.allow_custom_code and s.layout_reuse > 0:
+            chosen = [p["pattern"] if p else None for p in placed]
+            over = budget(chosen, s.layout_reuse)
+            forms = assign_forms([jobs[i]["content"] for i in over])
+            for i, form in zip(over, forms):
+                pending.append({"position": i, "content": jobs[i]["content"], "form": form,
+                                "rework": True, "layout": placed[i]["pattern"],
+                                "why": f"the template's {placed[i]['pattern'].split('@')[0]} "
+                                       f"layout is already used enough in this deck"})
+                designed.append({"slide": i + 1, "instead_of": placed[i]["pattern"], "as": form})
+            pending.sort(key=lambda p: p["position"])
+            if designed:
+                log("  layouts: " + ", ".join(f"slide {d['slide']} to be reworked as {d['as']} "
+                                              f"(not {d['instead_of']} again)" for d in designed))
+
         slides = [p for p in placed if p is not None]
+        plan_jobs = [i for i, p in enumerate(placed) if p is not None]
         ws.publish_json(attempts, "render_attempts.json")
 
     plan = {"title": outline_doc.get("title", ""), "footer": outline_doc.get("footer", ""),
@@ -185,10 +208,10 @@ def render_slides(state: DeckState, planner=None, log=print) -> dict:
     log(f"  stage 2: {len(slides)} slides placed, {retried} retried, "
         f"{len(pending)} need a custom slide, {len(failed)} failed")
 
-    out: dict = {"plan": plan, "pending_code": pending,
+    out: dict = {"plan": plan, "pending_code": pending, "plan_jobs": plan_jobs,
                  "trace": [step("render_slides", placed=len(slides), retried=retried,
                                 no_fit=len(pending), failed=len(failed),
-                                varied=varied or None,
+                                varied=varied or None, designed=designed or None,
                                 spread={str(c["slide"]): c["removed"]
                                         for c in spread_changes} or None,
                                 relaxed={str(k + 1): v for k, v in relaxations.items()} or None)]}
@@ -229,15 +252,36 @@ def assemble(state: DeckState, log=print) -> dict:
 
         plan_uri = ws.publish_json(plan, "plan.json")
         ws.publish_json(result.ops, "ops.json")
+        out_path = result.out_path
+        if state.get("code_slides"):
+            # Rebuilding from the plan (a repair after the designed slides were drawn) would
+            # otherwise drop them: the plan only describes the template's slides. Their code and
+            # context were kept for exactly this, so they are drawn again, not re-generated.
+            from ..engine.tidy import renumber_pages
+            from .edit import _replay_code_slides
+
+            replayed, _, problems = _replay_code_slides(ws, out_path, state["code_slides"],
+                                                        None, log)
+            numbered = ws.path("out-numbered.pptx")
+            renumber_pages(replayed, numbered)
+            import shutil
+            shutil.copy(numbered, ws.path("out.pptx"))
+            out_path = ws.path("out.pptx")
+            if problems:
+                log(f"  assemble: {problems[0]}")
         uri, versions = publish_version(state, ws, "out.pptx")
-        previews, why_not = make_previews(state, ws, result.out_path)
+        previews, why_not = make_previews(state, ws, out_path)
         log(f"  assemble: {result.summary()}")
         return {
             "deck_versions": versions, "deck_plan": plan_uri,
             "findings": result.findings, "structural": result.structural, "leaked": result.leaked,
             "previews": previews,
-            "changelog": [{"change": f"built {len(plan['slides'])} slides in the template's look",
-                           "pattern_counts": _counts(plan)}],
+            "changelog": [{"change": f"built {len(plan['slides'])} slides from the template's layouts",
+                           "pattern_counts": _counts(plan)},
+                          *[{"change": f"designed slide {c['position'] + 1} as a {c.get('form')}",
+                             "slide": c["position"] + 1, "why": c.get("why"),
+                             "explanation": c.get("explanation")}
+                            for c in state.get("code_slides") or [] if c.get("form")]],
             "trace": [step("assemble", **result.summary(), previews=len(previews),
                            previews_skipped=why_not)],
         }
@@ -277,12 +321,33 @@ def repair(state: DeckState, planner=None, log=print) -> dict:
         jobs = slide_flow.expand(state["outline"], kit)
         log(f"  repair round {round_}: slides {[i + 1 for i in by_slide]} sent back")
 
+        # Plan slide i is not outline job i once some slides are designed (they are not in the
+        # plan) - reading jobs[i] put one slide's content in place of another's. The mapping
+        # comes from render_slides; without one the two are the same list.
+        plan_jobs = state.get("plan_jobs") or list(range(len(plan["slides"])))
+
         fixed = 0
         for i, messages in by_slide.items():
-            if i >= len(plan["slides"]) or i >= len(jobs):
+            if i >= len(plan["slides"]) or i >= len(plan_jobs) or plan_jobs[i] >= len(jobs):
                 continue
+            job = jobs[plan_jobs[i]]
+            if s.layout_reuse > 0 and s.allow_custom_code:
+                # A repair may move a slide to another layout; not to one already at its budget.
+                own = plan["slides"][i]["pattern"].split("@")[0]
+                # slides that are reworked into diagrams do not use up their layout's budget
+                reworked = {plan_jobs.index(p["position"]) for p in state.get("pending_code") or []
+                            if p.get("rework") and p["position"] in plan_jobs}
+                used: dict[str, int] = {}
+                for j, other in enumerate(plan["slides"]):
+                    if j != i and j not in reworked:
+                        base = other["pattern"].split("@")[0]
+                        used[base] = used.get(base, 0) + 1
+                allowed = [o for o in job["options"]
+                           if o["pattern"].split("@")[0] == own
+                           or used.get(o["pattern"].split("@")[0], 0) < s.layout_reuse]
+                job = {**job, "options": allowed or job["options"]}
             ctx = {"deck_title": plan.get("title", ""), "slide": i + 1, "of": len(plan["slides"])}
-            slide, _ = slide_flow.render_one(planner, jobs[i], ctx, index, kit, content,
+            slide, _ = slide_flow.render_one(planner, job, ctx, index, kit, content,
                                              s.render_retries, feedback=messages,
                                              previous=plan["slides"][i], log=log)
             if slide is not None:
@@ -299,12 +364,15 @@ def repair(state: DeckState, planner=None, log=print) -> dict:
 def after_assemble(state: DeckState) -> str:
     """Clean -> hand it over. Problems -> repair, then the escape hatch, then say so honestly."""
     s = settings()
-    if state.get("pending_code") and state.get("code_attempt", 0) == 0:
-        return "custom_code"                      # slides nothing could hold are still owed
-    if not warnings_of(state):
-        return "deliver"
+    # Repair the template slides first, then draw the designed ones. In the other order a
+    # repair rebuilds the deck from its plan - which has no designed slides in it - and they
+    # would have to be drawn all over again.
     if state.get("repair_round", 0) < s.max_repair_rounds and state.get("findings"):
         return "repair"
+    if state.get("pending_code") and state.get("code_attempt", 0) == 0:
+        return "custom_code"                      # slides owed: designed, or nothing could hold
+    if not warnings_of(state):
+        return "deliver"
     if s.allow_custom_code and state.get("findings") and \
             state.get("code_attempt", 0) < s.code_attempts:
         return "custom_code"

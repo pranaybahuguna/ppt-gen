@@ -7,9 +7,9 @@ this project were wrong until something was *run*, and the sections below say wh
 
 | Layer | Command | Needs | Count |
 |---|---|---|---|
-| Unit | `make test` | nothing running | 107 |
-| Integration | `make test-all` | Docker, Postgres, S3 | 18 |
-| The engine's own | `make test-engine` | nothing | 28, unmodified |
+| Unit | `make test` | nothing running | 244 |
+| Integration | `make test-all` | Docker, Postgres, S3 | 19 |
+| The engine's own | `make test-engine` | nothing | 28, with this project's patch applied |
 | Offline conversation | `make demo` | Postgres, S3 | every route, no model |
 | Real model | `tests/validate_real_model.py` | `llm.json` | every model call |
 
@@ -23,7 +23,10 @@ it is a consequence of the architecture, not an achievement of the tests.
 |---|---|---|---|
 | create → kit → outline → render → assemble → deliver | yes | yes, a 5-slide deck | yes |
 | repair loop (character budget) | yes | not needed - 0 retries | – |
-| escape hatch: code → container → reseal → check | yes | yes | yes |
+| model-written code: code → container → reseal → check | yes | yes | yes |
+| gather: context → facts, quotes checked against the source | yes | yes, a README into 33-40 facts, 0-1 dropped | – |
+| layout budget → slides reworked in place by code | yes, in the sandbox | yes, 6 of 12 slides on the README deck | yes - the frame version was broken; see 08-status |
+| clean-up: tidy, purge, orphans, everything; tests clean up after themselves | yes | – | – |
 | translate: tagged runs → ops → apply | **see below** | yes, 6 ops of real French | – |
 | edit: `set_text` | yes | yes | – |
 | edit: `relayout_cards` | compile only | yes, 41 ops | not yet applied to a deck |

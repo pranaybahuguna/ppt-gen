@@ -14,8 +14,8 @@ help:  ## list the targets
 # ---------------------------------------------------------------- setup
 
 .PHONY: setup
-setup: engine venv image fonts samples  ## everything needed to run, from a fresh clone
-	@echo; echo "now: make up && make init && make doctor"
+setup: engine venv config image fonts samples  ## everything needed to run, from a fresh clone
+	@echo; echo "now: make up && make init && make doctor   (docs/00-setup.md has the rest)"
 
 .PHONY: engine
 engine:  ## clone the deckops engine and apply this project's patches
@@ -44,7 +44,14 @@ venv:  ## create the virtualenv and install dependencies
 	@test -d .venv || python3.12 -m venv .venv
 	@$(PIP) install -q --upgrade pip
 	@$(PIP) install -q -r requirements-dev.txt -r engine/deckops/requirements.txt
+	@$(PIP) install -q --no-deps -e .          # the project itself, so `deckops` is a command
 	@$(PY) --version
+
+.PHONY: config
+config:  ## write config/agent.json from the example, if there is none (never overwrites)
+	@test -f config/agent.json && echo "config/agent.json exists, left alone" || \
+		(cp config/agent.example.json config/agent.json && echo "wrote config/agent.json")
+	@test -f llm.json || echo "no llm.json yet: copy llm.example.json and fill it in (docs/00-setup.md)"
 
 .PHONY: image
 image:  ## build the sandbox image (python + LibreOffice + poppler + fonts)
@@ -106,6 +113,26 @@ clean-scratch:  ## delete run output from local/, keeping fonts, samples and tem
 	after=$$(du -sk local 2>/dev/null | cut -f1); \
 	echo "local/ is now $$(du -sh local | cut -f1) (freed $$(( (before - after) / 1024 )) MB)"; \
 	echo "kept: $$(ls local | tr '\n' ' ')"
+
+# The bucket and Postgres. Each of these prints what it would delete; nothing goes without
+# CONFIRM=1 (e.g. `make tidy CONFIRM=1`). `deck_agent.cli clean --help` has the finer options.
+YES := $(if $(CONFIRM),--yes,)
+
+.PHONY: ls
+ls:  ## what is in the bucket, one line per deck
+	@$(PY) -m deck_agent.cli ls
+
+.PHONY: tidy
+tidy:  ## drop older runs' previews/plans/ops from every deck, keeping each usable (CONFIRM=1)
+	@$(PY) -m deck_agent.cli clean --tidy $(YES)
+
+.PHONY: clean-tests
+clean-tests:  ## decks and objects left behind by interrupted test runs (CONFIRM=1)
+	@$(PY) -m deck_agent.cli clean --tests --orphans $(YES)
+
+.PHONY: clean-all
+clean-all:  ## every deck, session, kit and upload (CONFIRM=1)
+	@$(PY) -m deck_agent.cli clean --all $(YES)
 
 .PHONY: init
 init:  ## create the checkpoint tables and the bucket

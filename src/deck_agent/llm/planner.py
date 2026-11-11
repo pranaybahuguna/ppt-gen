@@ -27,7 +27,7 @@ import re
 
 from ..engine import bootstrap
 from ..settings import Settings, settings
-from .prompts import CODE_SYSTEM, EDIT_SYSTEM, REVIEW_SYSTEM, ROUTE_SYSTEM
+from .prompts import CODE_SYSTEM, EDIT_SYSTEM, GATHER_SYSTEM, REVIEW_SYSTEM, ROUTE_SYSTEM
 
 bootstrap()
 from controlplane.planner import OpenAICompatPlanner, RecordedVision, StubPlanner  # noqa: E402,F401
@@ -41,6 +41,11 @@ class AgentPlanner(OpenAICompatPlanner):
     def route(self, instruction: str, context: dict) -> dict:
         return self._chat(ROUTE_SYSTEM, json.dumps({"request": instruction, "session": context},
                                                    ensure_ascii=False))
+
+    def gather(self, request: str, sources: list[dict]) -> dict:
+        """Context in, facts out: what the deck may say. Every quote is checked afterwards."""
+        return self._chat(GATHER_SYSTEM, json.dumps(
+            {"request": request, "sources": sources}, ensure_ascii=False))
 
     def plan_edit(self, instruction: str, slides: list[dict], context: dict | None = None) -> dict:
         return self._chat(EDIT_SYSTEM, json.dumps(
@@ -83,27 +88,36 @@ def build(prs, ctx):
     w, h = ctx["slide_size"]["w"], ctx["slide_size"]["h"]
     style = ctx["style"]
     content = ctx["content"]
-    slide = prs.slides.add_slide(prs.slide_layouts[ctx.get("blank_layout", 6)])
-
     margin = int(w * 0.06)
-    title = slide.shapes.add_textbox(Emu(margin), Emu(int(h * 0.08)),
-                                     Emu(w - 2 * margin), Emu(int(h * 0.14)))
-    tf = title.text_frame
-    tf.word_wrap = True
-    tf.text = content.get("title", "")
-    run = tf.paragraphs[0].runs[0]
-    run.font.size = Pt(style.get("title_pt", 28))
-    run.font.bold = True
-    run.font.name = style.get("font", "Calibri")
-    run.font.color.rgb = _rgb(style.get("text_colour"))
+    top, box_h = int(h * 0.32), int(h * 0.42)
+    if ctx.get("target_slide") is not None:
+        # rework in place: keep title, page and frame art; clear the old layout's content
+        slide = prs.slides[ctx["target_slide"]]
+        content_ids = {s["id"] for s in ctx.get("shapes") or [] if s["role"] == "content"}
+        for sh in list(slide.shapes):
+            if sh.shape_id in content_ids:
+                sh._element.getparent().remove(sh._element)
+        box = ctx["body_box"]
+        margin, top, box_h = box["x"], box["y"] + int(box["h"] * 0.1), int(box["h"] * 0.7)
+        w = box["x"] * 2 + box["w"]
+    else:
+        slide = prs.slides.add_slide(prs.slide_layouts[ctx.get("blank_layout", 6)])
+        title = slide.shapes.add_textbox(Emu(margin), Emu(int(h * 0.08)),
+                                         Emu(w - 2 * margin), Emu(int(h * 0.14)))
+        tf = title.text_frame
+        tf.word_wrap = True
+        tf.text = content.get("title", "")
+        run = tf.paragraphs[0].runs[0]
+        run.font.size = Pt(style.get("title_pt", 28))
+        run.font.bold = True
+        run.font.name = style.get("font", "Calibri")
+        run.font.color.rgb = _rgb(style.get("text_colour"))
 
     items = (content.get("points") or [])[:4]
     if not items:
         return
     gap = int(w * 0.02)
     box_w = (w - 2 * margin - gap * (len(items) - 1)) // len(items)
-    top = int(h * 0.32)
-    box_h = int(h * 0.42)
     palette = style.get("palette") or ["3B82F6"]
     for i, item in enumerate(items):
         x = margin + i * (box_w + gap)
@@ -156,6 +170,30 @@ class StubAgentPlanner(StubPlanner):
 
     def route(self, instruction: str, context: dict) -> dict:
         return rules_route(instruction, context) | {"from": "stub"}
+
+    def gather(self, request: str, sources: list[dict]) -> dict:
+        """Offline: every sentence of prose becomes a fact, quoting itself. Crude, but every
+        quote is genuinely in the source, so it exercises the same checks as a model would."""
+        facts = []
+        for src in sources:
+            section, in_code = "", False
+            for line in src["text"].splitlines():
+                stripped = line.strip()
+                if stripped.startswith("```"):
+                    in_code = not in_code
+                    continue
+                if in_code:
+                    continue
+                if stripped.startswith("#"):
+                    section = stripped.lstrip("#").strip()
+                    continue
+                if not stripped or stripped.startswith(("```", "|", "    ")):
+                    continue
+                for sentence in re.split(r"(?<=[.!?])\s+", stripped.lstrip("*-> ").strip()):
+                    if len(sentence) >= 25:
+                        facts.append({"text": sentence, "quote": sentence,
+                                      "source": f"{src['name']} > {section}".rstrip(" >")})
+        return {"facts": facts[:40], "datasets": {}, "gaps": []}
 
     def plan_edit(self, instruction: str, slides: list[dict], context: dict | None = None) -> dict:
         """A tiny but real editor: `set_text` on the slides named, shortened if asked."""

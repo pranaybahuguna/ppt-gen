@@ -68,15 +68,35 @@ Write a Python module with exactly one top-level function:
     ctx["content"]      the words and numbers to place. Use these; invent nothing.
     ctx["insert_after"] <int> | null                      where this slide will end up, for
                                                           context only - see the rule below
-    ctx["blank_layout"] <int>                             index of a blank layout in prs
+    ctx["target_slide"] <int> | null                      a slide ALREADY in prs to rework in
+                                                          place: prs.slides[ctx["target_slide"]]
+    ctx["shapes"]       [{"id","role","name","kind","x","y","w","h","text"}] | null
+                                                          what is on that slide now; role is
+                                                          title / page / frame (leave these) or
+                                                          content (yours to move, restyle,
+                                                          reuse or delete)
+    ctx["chrome_layout"] {"master": m, "layout": l} | null  the template's content-slide
+                                                          layout: header band, title box and
+                                                          footer come with it. Use
+                                                          prs.slide_masters[m].slide_layouts[l]
+    ctx["body_box"]     {"x","y","w","h"} in EMU          the area below the title and above
+                                                          the footer: draw only inside it
+    ctx["form"]         "<diagram name>"                  what to draw this slide as
+    ctx["form_hint"]    "<one line>"                      what that diagram looks like
+    ctx["avoid_forms"]  ["..."]                           diagrams other slides already use
+    ctx["blank_layout"] <int>                             a blank layout, if chrome_layout is null
 
 Rules:
-  * add your slide with `prs.slides.add_slide(...)`; do not save `prs`, and **do not move or
+  * add your slide with `prs.slides.add_slide(...)` (unless ctx["target_slide"] is given);
+    do not save `prs`, and **do not move or
     reorder any slide**. The harness puts your slide in the right place afterwards. (It finds
     your slide by identity, so moving it yourself cannot corrupt the deck - it simply wastes
     an attempt.)
   * add or modify slides on `prs`; do not save it - the harness does that
-  * EMU everywhere (914400 per inch); keep every shape inside the slide
+  * when ctx["target_slide"] is given, rework that slide and add no slide: leave every shape
+    whose role is title, page or frame exactly as it is
+  * otherwise add the slide on ctx["chrome_layout"] and put the title in slide.shapes.title
+  * EMU everywhere (914400 per inch); keep every shape inside ctx["body_box"]
   * use only ctx["style"] colours and fonts, so the slide looks like the rest of the deck
   * put only words a reader should see on the slide: never an identifier, a key or an id
   * no network, no filesystem, no subprocesses - none of them exist where this runs

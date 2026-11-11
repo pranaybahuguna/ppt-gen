@@ -14,7 +14,7 @@ config/agent.json
 local/
 runs/
 
-# The deckops engine is a clone, used unmodified. `make engine` fetches it;
+# The deckops engine is a clone. `make engine` fetches it and applies patches/*.patch;
 # engine/README.md explains why it is not vendored into this repository.
 engine/deckops/
 
@@ -32,3 +32,5 @@ __pycache__/
 .ruff_cache/
 .mypy_cache/
 .DS_Store
+*.egg-info/
+build/

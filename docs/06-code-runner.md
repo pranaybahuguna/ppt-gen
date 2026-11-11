@@ -18,6 +18,48 @@ sentence is too long".
 
 It is off by default (`allow_custom_code`).
 
+## Designed slides: the second trigger
+
+A template with six layouts, used for a twelve-slide deck, repeats - and when only three of its
+layouts can hold this kind of content, every attempt to vary the deck lands on one of those
+three. The first README deck built here was `columns` six times and the same lightbulb layout
+four times. Reordering menus (`engine/variety.py`) cannot fix that; only not using the template
+for some slides can.
+
+So with `layout_reuse` set (2 in `config/agent.json`), each template layout is used **as it
+is** at most that many times per deck, and never on two slides in a row. A slide over that
+budget is still built from its layout - with the template's title, header, footer and page
+number, and its content in place - and then **reworked** by model-written code into a diagram:
+
+* `render_slides` marks it, and `engine/variety.assign_forms` gives it a diagram suited to its
+  content that no other reworked slide in the deck uses: process flow, timeline, staircase,
+  hub and spoke, 2x2 matrix, side-by-side contrast, big numbers, layered stack, pyramid,
+  cycle, icon grid, statement.
+* `custom_code` gives the model that slide (`ctx["target_slide"]`) and a list of what is on
+  it (`ctx["shapes"]`): the title, page number and header/footer art are marked to be left
+  alone; the old layout's content is the model's to move, restyle, reuse or delete. The style
+  brief gives the palette and type, and `common.design_frame` the area content may occupy.
+* The slide never leaves its place in the plan, so nothing is inserted or moved afterwards,
+  and repair and review always mean the slide they say.
+* First drafts for every reworked slide are written in parallel; running, checking and
+  accepting them is one at a time.
+* Each is checked like any other slide, then - with `vision_review` on - rendered and looked
+  at, and sent back with what the vision model saw.
+* **If a rework fails every attempt, the slide keeps its template layout** - a repeated
+  layout, never a lost slide - and the result says which.
+* The template's slides are repaired *before* anything is reworked; if a rebuild happens
+  later, the kept code and context rework the slides again rather than generating new code.
+
+**Why not an empty "frame" slide to draw on.** That was tried: one emptied copy of a content
+slide, kept in the template as the canvas. It removed the positioning bugs, but brought its
+own - a title box that ran off a half-width header picture onto white, an empty slide the
+vision review rightly called empty - and every one of them was a problem the drawing code was
+not allowed to fix. Starting from a real, finished slide of the template means the title,
+header and page number are exactly what that layout does on every other slide, already
+checked and repaired by the normal loop.
+
+The template stays the deck's look; it stops being the only shape a slide can take.
+
 ## The contract
 
 The model writes a module with exactly one function. The contract lives in

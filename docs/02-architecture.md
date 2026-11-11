@@ -126,7 +126,7 @@ src/deck_agent/
   infra/           storage, workspace, checkpointer
   sandbox/         docker, render, code, guard
 runner/            what lives inside the sandbox image
-engine/deckops/    the engine, cloned and unmodified
+engine/deckops/    the engine, cloned and patched (patches/)
 docker/            compose, the two Dockerfiles, the S3 identities
 tests/unit/        pass with nothing running
 tests/integration/ need docker, Postgres, S3 - and skip with a reason otherwise

@@ -1,0 +1,21 @@
+# Packaging, so the project is importable and `deckops` is a command on any machine.
+# Dependencies are pinned in requirements.txt (and the engine's own requirements), which
+# `make venv` installs first; this file installs the project itself, editable, without them.
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "deckops-agent"
+version = "0.2.0"
+description = "A LangGraph agent over the deckops PowerPoint engine"
+requires-python = ">=3.12"
+
+[project.scripts]
+deckops = "deck_agent.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]

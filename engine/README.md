@@ -1,26 +1,32 @@
-# engine/ — the deckops engine, vendored
+# engine/ — the deckops engine
 
-`engine/deckops/` is a clone of <https://github.com/pranaybahuguna/deckops>, used **unmodified**.
+`engine/deckops/` is a clone of <https://github.com/pranaybahuguna/deckops>, **patched** by this
+project. It is git-ignored here; `make engine` clones it and applies `patches/*.patch`:
 
-    git clone https://github.com/pranaybahuguna/deckops engine/deckops
+    make engine          # clone + patch (idempotent)
+    make engine-reset    # drop the patches, back to upstream
+    make test-engine     # the engine's own 28 tests, which pass with the patches applied
 
-It is cloned, and then **patched** — see `patches/README.md`. Up to group support it was used
-entirely unmodified, and everything else still is. Every change this project needs is made by *composition*:
+**How the agent uses it.** In-process, as a library. `src/deck_agent/engine/__init__.py`
+(`bootstrap()`) puts the clone on `sys.path`; the graph's nodes call the engine's pieces -
+`deckops.probe`, `deckops.compiler`, `deckops.patterns`, `deckops.executor`,
+`controlplane.slide_flow`, `controlplane.kit_check` - rather than its end-to-end orchestrators,
+so every step is a node with its own state, trace and checkpoint. Files are staged into a local
+workspace and published to object storage; the engine only ever sees local paths.
+`docs/01-why-one-process.md` explains why there is no separate engine process.
 
-| What we needed | How we get it without touching the engine |
-|---|---|
-| Run the data plane in Docker instead of `unshare`/`sandbox-exec` | `deck_agent.engine_bridge.install_docker_sandbox()` replaces the single function `controlplane.sandbox.run`, whose contract (argv in, files + JSON report out) the engine's own docstring says is the production seam |
-| Decompose the pipelines into graph nodes | nodes call the engine's *pieces* (`deckops.probe`, `deckops.compiler`, `deckops.patterns`, `controlplane.slide_flow`) rather than `controlplane.orchestrator.translate()` wholesale |
-| Keep artefacts in object storage | nodes stage files into a temp workspace and publish them to S3; the engine still sees plain local paths |
+**What the patch changes**, and why composition could not: the rules deciding whether a slide
+can become a reusable layout live inside the engine and read the file themselves. The patch
+gives the engine group support (slide-space geometry for shapes inside groups, writing it back,
+checks that look inside groups), a better rule for which pictures are decoration, and
+placeholder text that is at most the example's length. On a real commercial template it took
+the kit from 0 usable layouts to 6. `patches/README.md` has the details, file by file.
 
-`pytest engine/deckops/tests` (28 tests) stays a valid regression check either way, and it
-passes with the patches applied — which is what makes patching the engine safe to do at all.
-`make engine-reset` returns the clone to upstream.
+**Pinned to.** The patch is a `git diff` against the upstream commit in use when it was made
+(`make doctor` prints the engine commit). If upstream moves and the patch no longer applies,
+`make engine` says so and stops; redo the change against the new upstream rather than forcing
+it.
 
-The one thing composition could not reach is group support: the rules deciding whether a slide
-can become a reusable layout live inside the engine and read the file themselves, so nothing
-outside can change their minds. That is `patches/0001-group-support.patch`, and it took a real
-commercial template from 0 usable layouts to 5.
-
-To make this a real dependency later: `git submodule add` it, or publish the engine as a wheel and
-drop `engine/` entirely — `engine_bridge.py` is the only file that knows where it lives.
+To make this a real dependency later: publish the engine as a wheel with the patch upstreamed,
+and drop `engine/` - `src/deck_agent/engine/__init__.py` is the only file that knows where it
+lives.

@@ -93,7 +93,7 @@ def after_route(state: DeckState) -> str:
     if chosen == "ask":
         return "ask"
     if chosen == "create":
-        return "ensure_kit"
+        return "gather"
     if chosen == "translate":
         return "translate_plan"
     if chosen == "edit":

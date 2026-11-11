@@ -426,6 +426,8 @@ def _change_layouts(ws, deck, relayouts: list[dict], state, planner, log):
     # on the deck itself while the template has a cover sitting right there.
     can, why_not = _can_rebuild(state)
     if can:
+        can, why_not = _template_still_there(state)
+    if can:
         rebuilt, changed, problems, updated = _rebuild_with_layouts(
             ws, relayouts, state, planner, log)
         if rebuilt is not None:
@@ -588,6 +590,17 @@ def _can_rebuild(state) -> tuple[bool, str]:
     return True, ""
 
 
+def _template_still_there(state) -> tuple[bool, str]:
+    """A rebuild needs the template and its kit, and with `single_kit` ingesting another
+    template removes both. Kept apart from `_can_rebuild`, which only reads the state."""
+    from ..infra.storage import store
+
+    if store().exists(state["kit"]) and store().exists(state["template"]):
+        return True, ""
+    return False, ("the template this deck was built from has been replaced (only one kit is "
+                   "kept), so I can only change it using the layouts already in the deck")
+
+
 def _replay_code_slides(ws, deck, code_slides, planner, log):
     """Draw the generated slides again on a rebuilt deck, from the code that drew them.
 
@@ -600,13 +613,17 @@ def _replay_code_slides(ws, deck, code_slides, planner, log):
     from ..sandbox.code import run_builder
 
     current, replayed, problems = deck, [], []
-    for entry in code_slides or []:
+    for entry in sorted(code_slides or [], key=lambda e: e.get("position", 0)):
         if not entry.get("code") or not entry.get("ctx"):
             problems.append(f"the slide drawn by code at position {entry.get('slide')} could "
                             "not be put back: its source was not kept")
             continue
         code = store().get_bytes(entry["code"]).decode()
         ctx = store().get_json(entry["ctx"])
+        if entry.get("rework"):
+            # The rebuilt deck has this slide in its template layout, in this position (it is
+            # in the plan); the code reworks it again, exactly as it did the first time.
+            ctx["target_slide"] = entry["position"]
         result = run_builder(code, ctx, current)
         if not result.ok:
             problems.append(f"the slide drawn by code at position {entry.get('slide')} could "
@@ -616,6 +633,11 @@ def _replay_code_slides(ws, deck, code_slides, planner, log):
         sealed = ws.path(f"replay-{entry.get('slide')}.pptx")
         reseal(current, result.deck, sealed)
         after = probe(sealed)
+        if entry.get("rework"):
+            current = sealed
+            replayed.append(entry["position"] + 1)
+            log(f"  rebuild: reworked slide {entry['position'] + 1} again")
+            continue
         drawn = new_slide_index(before, after)
         if drawn is None:
             problems.append(f"the replayed code at position {entry.get('slide')} added no slide")

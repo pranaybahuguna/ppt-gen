@@ -24,7 +24,7 @@ loop with tools.
 
         START -> intake -> route -> ask --------------+
                              |                        |
-                             +-> ensure_kit -> outline -> approve_outline -> render_slides
+                             +-> gather -> ensure_kit -> outline -> approve_outline -> render_slides
                              |                                                   |
                              |                            +----------------------+
                              |                            v
@@ -108,6 +108,7 @@ def build_graph(planner=None, log=print) -> StateGraph:
     g.add_node("ask", nodes.ask)
     g.add_node("decline", nodes.decline)
 
+    g.add_node("gather", partial(nodes.gather, planner=planner, log=log))
     g.add_node("ensure_kit", partial(nodes.ensure_kit, planner=planner, log=log))
     g.add_node("outline", partial(nodes.outline, planner=planner, log=log))
     g.add_node("approve_outline", nodes.approve_outline)
@@ -130,11 +131,12 @@ def build_graph(planner=None, log=print) -> StateGraph:
     g.add_edge("intake", "route")
 
     g.add_conditional_edges("route", nodes.after_route,
-                            ["ask", "ensure_kit", "translate_plan", "edit_plan",
+                            ["ask", "gather", "translate_plan", "edit_plan",
                              "custom_code", "decline"])
     # An answer goes back through the router: the question may have changed the route entirely.
     g.add_edge("ask", "route")
 
+    g.add_conditional_edges("gather", nodes.after_gather, ["ensure_kit", "ask", "decline"])
     g.add_conditional_edges("ensure_kit", after_ensure_kit, ["outline", "ask", "decline"])
     g.add_conditional_edges("outline", after_outline, ["approve_outline", "ask", "decline"])
     g.add_conditional_edges("approve_outline", nodes.after_approval, ["render_slides", "decline"])

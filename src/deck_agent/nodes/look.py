@@ -87,6 +87,13 @@ def review_previews(previews: list[Path], planner, context: dict | None = None,
     return findings, notes
 
 
+def _slide_number(uri: str) -> int:
+    import re
+
+    m = re.search(r"slide-(\d+)\.png$", str(uri))
+    return int(m.group(1)) if m else 0
+
+
 def look(state, planner=None, log=print) -> dict:
     """The graph node. Off unless `vision_review` is on; never blocks delivery."""
     s = settings()
@@ -96,6 +103,12 @@ def look(state, planner=None, log=print) -> dict:
     from .common import workspace
 
     previews = state.get("previews") or []
+    # Slides about to be reworked, or already reworked, are not looked at here: the first are
+    # about to change, and the second were looked at, one by one, when they were reworked.
+    designed = ({p["position"] for p in state.get("pending_code") or [] if p.get("rework")}
+                | {c["position"] for c in state.get("code_slides") or [] if c.get("rework")})
+    if designed:
+        previews = [u for u in previews if _slide_number(u) - 1 not in designed]
     if not previews:
         return {"trace": [step("look", outcome="nothing was rendered")],
                 "errors": [{"kind": "not_looked_at", "message":
@@ -107,6 +120,25 @@ def look(state, planner=None, log=print) -> dict:
         findings, notes = review_previews(
             local, planner,
             {"deck_title": (state.get("plan") or {}).get("title", "")}, log)
+
+    # The previews are of the whole deck, designed slides included; repair works on the plan,
+    # which has no designed slides in it. Number the findings the way repair will read them,
+    # and keep what was seen on a designed slide as a note - it was looked at when it was drawn.
+    code_slides = state.get("code_slides") or []
+    drawn = sorted({c["position"] for c in code_slides if "position" in c})
+    # A reworked slide is a plan slide in its own position; one added by code (no layout could
+    # hold it) is not in the plan, and the slides after it are one further on.
+    inserted = sorted({c["position"] for c in code_slides
+                       if "position" in c and not c.get("rework")})
+    if drawn:
+        kept = []
+        for f in findings:
+            i = f["slide_index"]
+            if i in drawn:
+                notes.append(f"slide {i + 1}: {f.get('what', f['kind'])}")
+                continue
+            kept.append({**f, "slide_index": i - sum(1 for d in inserted if d < i)})
+        findings = kept
 
     # Appearance findings join the geometric ones, so the existing decision and repair loop
     # handle them without knowing where they came from.

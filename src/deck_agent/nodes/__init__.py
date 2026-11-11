@@ -20,6 +20,7 @@ from .create import (  # noqa: F401
 from .custom_code import after_code, custom_code  # noqa: F401
 from .deliver import deliver  # noqa: F401
 from .edit import after_edit, edit_apply, edit_plan  # noqa: F401
+from .gather import after_gather, gather  # noqa: F401
 from .intake import intake  # noqa: F401
 from .kit import after_kit, ensure_kit  # noqa: F401
 from .look import look, review_previews  # noqa: F401

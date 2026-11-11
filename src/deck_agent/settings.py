@@ -79,6 +79,17 @@ class Settings:
     vision_workers: int = 4
     local_root: str = "local"                   # scratch only; nothing of record lives here
     default_template: str = ""                  # object URI used when a create request names no template
+    layout_reuse: int = 0                       # each template layout at most this many times
+                                                # per deck, never twice in a row; slides over it
+                                                # are designed by model-written code instead.
+                                                # 0 = no limit. Needs allow_custom_code.
+    single_kit: bool = False                    # kits/ holds one kit only: ingesting a template
+                                                # (`deckops kit`) replaces the one there, and a
+                                                # deck made from any other template keeps its kit
+                                                # beside the deck instead. See nodes/kit.py
+    tidy_after_turn: bool = False               # after each delivered turn, drop the deck's older
+                                                # run artefacts (previews, plans, ops), keeping
+                                                # what the session still needs. See infra/cleanup.py
 
     def redacted(self) -> dict:
         out = asdict(self)

@@ -416,3 +416,71 @@ index be3dcfa..2a091bf 100644
 +        return x, y, w, h
 +    return (int(round((x - bx) / ax)), int(round((y - by) / ay)),
 +            int(round(w / ax)), int(round(h / ay)))
+diff --git a/deckops/validate.py b/deckops/validate.py
+index 15121b9..e7990bb 100644
+--- a/deckops/validate.py
++++ b/deckops/validate.py
+@@ -101,13 +101,36 @@ def _wrap_lines(text, font, width):
+     return lines
+ 
+ 
++def text_shapes(shapes):
++    """Every shape holding text, groups opened up.
++
++    A shape inside a group is as much on the slide as one outside it. Before group support the
++    kit never put text inside a group, so looking only at the top level missed nothing; with it,
++    cards, figures and labels routinely live inside groups, and a check that cannot see them
++    passes a slide whose text runs out of its box.
++    """
++    for sh in shapes:
++        if getattr(sh, "shape_type", None) == 6 or sh._element.tag == qn("p:grpSp"):
++            yield from text_shapes(sh.shapes)
++        elif sh.has_text_frame and sh.text_frame.text.strip():
++            yield sh
++
++
++def _slide_box(shape):
++    """(left, top, width, height) in slide EMU. A group scales its children's boxes (but not
++    their font sizes), so a child's own numbers are not the size it is drawn at."""
++    from .refs import to_slide
++    return to_slide(shape._element, shape.left or 0, shape.top or 0, shape.width or 0, shape.height or 0)
++
++
+ def predict_overflow(prs, slide, shape, major, minor):
+     tf = shape.text_frame
+     bodyPr = tf._txBody.find(qn("a:bodyPr"))
+     ins = {k: int(bodyPr.get(k, d)) / EMU_PER_PT for k, d in
+            (("lIns", 91440), ("rIns", 91440), ("tIns", 45720), ("bIns", 45720))}
+-    width = shape.width / EMU_PER_PT - ins["lIns"] - ins["rIns"]
+-    height = shape.height / EMU_PER_PT - ins["tIns"] - ins["bIns"]
++    _, _, box_w, box_h = _slide_box(shape)
++    width = box_w / EMU_PER_PT - ins["lIns"] - ins["rIns"]
++    height = box_h / EMU_PER_PT - ins["tIns"] - ins["bIns"]
+     is_body = shape.is_placeholder and shape.placeholder_format.type in (2, 7)  # BODY, OBJECT
+     if is_body:
+         width -= 0.3 * 72                                   # bullet indent, approx.
+@@ -153,9 +176,10 @@ def find_overlaps(slide, min_share=0.15):
+     """Pairs of text-holding shapes whose boxes overlap by more than min_share of the smaller box.
+     Text inside its own background box is not a problem (the box holds no text)."""
+     boxes = []
+-    for sh in slide.shapes:
+-        if sh.has_text_frame and sh.text_frame.text.strip() and sh.width and sh.height:
+-            boxes.append((sh.shape_id, sh.left, sh.top, sh.left + sh.width, sh.top + sh.height))
++    for sh in text_shapes(slide.shapes):
++        x, y, w, h = _slide_box(sh)
++        if w and h:
++            boxes.append((sh.shape_id, x, y, x + w, y + h))
+     out = []
+     for i in range(len(boxes)):
+         for j in range(i + 1, len(boxes)):
+@@ -215,8 +239,8 @@ def validate(path, slide_indices, outdir, do_render=True):
+     for i, s in enumerate(prs.slides):
+         if slide_indices is not None and i not in slide_indices:
+             continue
+-        for shp in s.shapes:
+-            if shp.has_text_frame and shp.text_frame.text.strip():
++        for shp in text_shapes(s.shapes):
++            if True:
+                 r = predict_overflow(prs, s, shp, major, minor)
+                 if r["overflow"]:
+                     findings.append({"kind": "overflow", "ref": f"slide:{s.slide_id}/shape:{shp.shape_id}",

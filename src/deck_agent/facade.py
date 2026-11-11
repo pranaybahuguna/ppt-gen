@@ -34,6 +34,27 @@ def _run_id() -> str:
     return time.strftime("%Y%m%d-%H%M%S-") + uuid.uuid4().hex[:6]
 
 
+def _tidy_if_asked(deck_id: str, result: dict, s: Settings) -> dict:
+    """`tidy_after_turn`: once a turn has delivered, drop the bulk the session no longer needs.
+
+    Only after a delivered result: a turn that stopped to ask a question is still running, and
+    its outline is exactly what the answer will be applied to. A failed tidy never fails the
+    turn - the deck was already delivered - it is reported beside it instead.
+    """
+    if not (s.tidy_after_turn and result.get("ok")):
+        return result
+    from .infra.checkpointer import checkpointer
+    from .infra.cleanup import tidy_session
+    from .infra.storage import store
+
+    try:
+        with checkpointer(s) as saver:
+            result = {**result, "tidied": tidy_session(store(s), saver, deck_id)}
+    except Exception as e:                       # noqa: BLE001
+        result = {**result, "tidied": {"error": f"{e.__class__.__name__}: {e}"}}
+    return result
+
+
 def _result(state: dict) -> dict:
     """One shape for every outcome, so the caller has one branch."""
     if state.get("pending_question"):
@@ -65,16 +86,23 @@ def _invoke(deck_id: str, payload: dict, planner=None, log=print, s: Settings | 
             question = out["__interrupt__"][0].value
             return {"ok": False, "question": question.get("question") if isinstance(question, dict)
                     else str(question), "session": summarise(out)}
-        return _result(out)
+    return _tidy_if_asked(deck_id, _result(out), s)
 
 
 # --------------------------------------------------------------------------- the tools
 
 def create_deck(deck_id: str, brief: str, content_pack: dict | None = None,
-                template: str | None = None, planner=None, log=print, **kw) -> dict:
-    """A new deck in a template's look. `content_pack` is the facts it is allowed to use."""
+                template: str | None = None, planner=None, log=print,
+                context: list[str] | None = None, **kw) -> dict:
+    """A new deck in a template's look.
+
+    `brief` is what the person said - it may carry all the context there is. `context` is any
+    documents (object URIs) the deck should be based on. From those two, `gather` writes the
+    facts the deck may state. `content_pack` skips that and supplies the facts directly.
+    """
     return _invoke(deck_id, {"instruction": brief, "content_pack": content_pack,
                              "template": template, "route": None,
+                             "context_docs": list(context or []),
                              "attachments": [a for a in [template] if a], **kw},
                    planner, log)
 
@@ -107,7 +135,7 @@ def answer(deck_id: str, text: str, planner=None, log=print, s: Settings | None 
             question = out["__interrupt__"][0].value
             return {"ok": False, "question": question.get("question") if isinstance(question, dict)
                     else str(question), "session": summarise(out)}
-        return _result(out)
+    return _tidy_if_asked(deck_id, _result(out), s)
 
 
 # --------------------------------------------------------------------------- the session

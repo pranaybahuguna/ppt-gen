@@ -1,7 +1,7 @@
 # patches/ — changes to the deckops engine
 
-The engine is a clone, kept out of this repository (see `engine/README.md`). Up to this point
-it was used **unmodified**, and every change this project needed was made by composition.
+The engine is a clone, kept out of this repository (see `engine/README.md`). It was first used
+**unmodified**, with every change this project needed made by composition.
 Group support could not be: the rules that decide whether a slide can be a reusable layout live
 inside the engine and read the file themselves, so nothing outside it can change their minds.
 
@@ -49,6 +49,7 @@ beat guessing.
 | `executor.py` | `set_geometry` converts back into the shape's own space before writing; a shape duplicated *out of* a group has its geometry rewritten into slide space, because the copy is appended to the slide |
 | `autokit.py` | what counts as *decoration* - a picture that comes with the layout rather than content on an example slide |
 | `kit_check.py` | placeholder text is *at most* the example's length, not a word longer |
+| `validate.py` | the overflow and overlap checks open groups up and measure each box at the size it is drawn |
 | `patterns.py` | a picture the pattern itself uses is not a leak — with groups usable, an item is routinely "icon + heading + body" and the icon is meant to be copied once per item |
 
 **Which pictures a layout keeps.** The original test was frequency alone: a picture on at
@@ -75,6 +76,13 @@ title came back as 16, which tipped a one-line heading box onto a second line, a
 was dropped for an overflow it does not have. `dummy()` now stops before exceeding the length.
 The capacity measurement still asks for 15% more on purpose, by passing `stretch`, so that
 stays deliberate rather than accidental. This took acceptance from 5 patterns to 6.
+
+**Checks that can see inside groups.** Once text could live inside a group, the overflow and
+overlap checks had to look there too - and they did not: both walked only the shapes at the top
+of the slide. On a deck built from this template, a 105-character sentence placed in a two-word
+label box inside a group needed 6.4 times the room it had, and was reported as fine; the slide
+went out with its text running down the page. They now open groups up, and measure each box at
+the size the group draws it (a group scales its children's boxes, though not their font sizes).
 
 **One judgement call worth review.** The same patch stops an *embedded object* from blocking a
 slide being copied. `_NO_CLONE` listed charts, SmartArt and OLE together; `clone_slide` shares

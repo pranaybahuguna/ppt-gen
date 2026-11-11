@@ -136,13 +136,18 @@ Running the agent on the host, as `make` does, has none of this problem.
 
 `Settings.redacted()` is what you print; `make doctor` uses it.
 
-The dials worth knowing:
+The dials worth knowing (the full table, with the example config's values, is in
+`docs/00-setup.md`):
 
 | Setting | Default | What it changes |
 |---|---|---|
 | `render_backend` | `docker` | `local` uses an installed `soffice`; `off` skips previews and says so |
-| `code_runner` | `docker` | `off` disables the escape hatch entirely |
-| `allow_custom_code` | `false` | whether the graph may reach the escape hatch at all |
+| `code_runner` | `docker` | `off` disables running model-written code entirely |
+| `allow_custom_code` | `false` | whether the graph may run model-written code at all (the example config turns it on) |
+| `layout_reuse` | `0` | each template layout at most this many times per deck; the rest reworked into diagrams (example config: 2) |
+| `code_attempts` | `2` | tries per model-written slide (example config: 3) |
+| `single_kit` | `false` | keep one template kit; ingesting replaces it (example config: true) |
+| `tidy_after_turn` | `false` | drop a deck's older run artefacts after each delivered turn |
 | `vision_review` | `false` | look at every rendered slide with a vision model; one call per slide |
 | `approve_outline` | `false` | pause for a person between stage 1 and building |
 | `max_repair_rounds` | `2` | how many times findings go back to the model |

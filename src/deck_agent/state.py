@@ -66,7 +66,9 @@ class DeckState(TypedDict, total=False):
     # ---- the request, this turn ----------------------------------------------------
     instruction: str                # what to do, in the person's words
     attachments: list[str]          # object URIs the caller supplied (a deck, a template)
-    content_pack: dict | None       # the facts and datasets a new deck may use
+    content_pack: dict | None       # the facts and datasets a new deck may use - written by
+                                    # `gather` from the context, unless the caller supplies it
+    context_docs: list[str]         # object URIs of documents the deck should be based on
 
     # ---- routing -------------------------------------------------------------------
     route: Route | None
@@ -95,6 +97,8 @@ class DeckState(TypedDict, total=False):
                                     # A deck can only be rebuilt from its plan while this is
                                     # empty, so each node that edits bytes without updating the
                                     # plan says so here, in words a person can read.
+    plan_jobs: list[int] | None     # plan slide i holds the content of outline job plan_jobs[i]
+                                    # - not the same index once some slides are designed
     deck_plan: str | None           # object URI of the plan that built the CURRENT deck. It
                                     # describes the deck, not the turn, so it survives
                                     # `turn_reset` - and it is what lets a later turn say
@@ -135,7 +139,7 @@ def new_state(thread_id: str, instruction: str, **kw: Any) -> DeckState:
     """A state for a first turn. Later turns resume the thread and keep what is already there."""
     base: DeckState = {
         "thread_id": thread_id, "instruction": instruction, "turn": 1,
-        "attachments": [], "deck_versions": [], "kit_patterns": [],
+        "attachments": [], "context_docs": [], "deck_versions": [], "kit_patterns": [],
         "findings": [], "structural": [], "leaked": [], "previews": [],
         "vision_notes": [],
         "repair_round": 0, "code_attempt": 0, "code_slides": [], "code_feedback": [],

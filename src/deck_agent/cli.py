@@ -3,7 +3,7 @@
     deckops doctor                       is everything this needs actually working?
     deckops init                         create the checkpoint tables and the bucket
     deckops seed                         put the sample template and content in the bucket
-    deckops kit <template.pptx>          build and cache a style kit for a template
+    deckops kit <template.pptx>          ingest a template: kit cached in kits/, template in uploads/
     deckops create <id> "<brief>" ...    a new deck
     deckops edit <id> "<instruction>"    change the deck this session has
     deckops translate <id> <lang>        translate it
@@ -12,6 +12,9 @@
     deckops session <id>                 what this session knows
     deckops undo <id>                    go back one version
     deckops get <s3://...> <path>        fetch an artefact
+    deckops ls [prefix]                  list what is in the bucket
+    deckops clean [...]                  delete decks, tidy them, or clear everything (dry run
+                                         unless --yes)
     deckops graph                        print the graph as mermaid
     deckops selftest                     prove the sandbox is isolated
 """
@@ -174,9 +177,23 @@ def cmd_kit(args) -> int:
     # template would keep getting the empty answer back for ever - including after the reason
     # it failed has been fixed. `ensure_kit` already declines rather than caching; this is the
     # command-line path catching up with it.
-    uri = None
+    uri = template_uri = replaced = None
     if kit["patterns"]:
         uri = store().put_json(kit, kit_key(template_id))
+        # The template goes in the bucket too, so a deck can be built from it by URI alone. It
+        # is the *prepared* copy when there is one: that is the file the kit's ids refer to.
+        name = source.stem + ("-prepared" if prepared["changed"] else "") + ".pptx"
+        template_uri = store().put(template, f"uploads/{template_id}-{name.replace(' ', '-')}")
+        if s.single_kit:
+            # Only now, with the new kit safely stored: a failed ingest replaces nothing.
+            from .infra.cleanup import keep_only_kit
+
+            replaced = keep_only_kit(store(), template_id)
+        if args.make_default:
+            cfg_path = REPO / "config" / "agent.json"
+            cfg = json.loads(cfg_path.read_text()) if cfg_path.exists() else {}
+            cfg["default_template"] = template_uri
+            cfg_path.write_text(json.dumps(cfg, indent=1) + "\n")
     if args.out:
         Path(args.out).write_text(json.dumps(kit, indent=1))
     beside = None
@@ -185,7 +202,10 @@ def cmd_kit(args) -> int:
         # in a scratch directory the caller does not know about.
         beside = Path(args.out or "kit.json").with_name(source.stem + "-prepared.pptx")
         beside.write_bytes(prepared_path.read_bytes())
-    _p({"template_id": template_id, "kit": uri, "use_this_template": str(beside) if beside else str(source),
+    _p({"template_id": template_id, "kit": uri, "template": template_uri,
+        "default_template": bool(args.make_default and template_uri),
+        "replaced": replaced if s.single_kit else "single_kit is off: other kits kept",
+        "use_this_template": str(beside) if beside else str(source),
         "patterns": sorted(kit["patterns"]),
         "capacity": report.get("capacity"),
         "dropped": {n: r.get("reasons") for n, r in report["patterns"].items()
@@ -201,8 +221,9 @@ def cmd_create(args) -> int:
     content = json.loads(Path(args.content).read_text()) if args.content else None
     outline = json.loads(Path(args.outline).read_text()) if args.outline else None
     extra = {"outline": outline} if outline else {}
+    context = [_upload_if_local(c) for c in args.context or []]
     result = facade.create_deck(args.id, args.brief, content,
-                                _upload_if_local(args.template), **extra)
+                                _upload_if_local(args.template), context=context, **extra)
     _p(result)
     return 0 if result.get("ok") else 1
 
@@ -257,6 +278,73 @@ def cmd_get(args) -> int:
     return 0
 
 
+def cmd_ls(args) -> int:
+    """The bucket, without needing the AWS CLI or its credentials set up."""
+    from .infra.cleanup import human
+
+    objs = store().objects(args.prefix or "")
+    if not args.recursive:
+        # one line per "folder" at this level, like `aws s3 ls`
+        depth = (args.prefix or "").count("/")
+        folders: dict[str, list] = {}
+        files = []
+        for o in objs:
+            parts = o.key.split("/")
+            if len(parts) > depth + 1:
+                folders.setdefault("/".join(parts[:depth + 1]) + "/", []).append(o)
+            else:
+                files.append(o)
+        for name, group in sorted(folders.items()):
+            print(f"{'DIR':>10}  {len(group):>5} objects {human(sum(o.size for o in group)):>10}  {name}")
+        objs = files
+    for o in objs:
+        print(f"{human(o.size):>10}  {o.key}")
+    return 0
+
+
+def cmd_clean(args) -> int:
+    """Plan a clean-up, show it, and only carry it out with --yes."""
+    from .infra import cleanup
+    from .infra.checkpointer import checkpointer
+
+    st = store()
+    with checkpointer() as saver:
+        chosen = [args.all, bool(args.deck), args.tidy, args.tests, args.orphans,
+                  bool(args.older_than)]
+        if not any(chosen):
+            _p(cleanup.inventory(st, saver))
+            print("\nNothing deleted. Choose what to clean: --deck ID, --tidy, --tests, "
+                  "--orphans, --older-than 7d or --all (then --yes to do it).")
+            return 0
+        if args.all and sum(map(bool, chosen)) > 1:
+            sys.exit("--all already covers everything; use it on its own")
+
+        if args.all:
+            plan = cleanup.plan_everything(st, saver, keep_templates=args.keep_templates)
+        else:
+            plan = cleanup.Plan()
+            if args.tidy:
+                # with --deck, tidy those decks; without, every deck that has a session
+                plan.add(cleanup.plan_tidy_all(st, saver, args.deck or None))
+            elif args.deck:
+                plan.add(cleanup.plan_purge(st, saver, args.deck))
+            if args.tests:
+                plan.add(cleanup.plan_purge(st, saver, list(cleanup.TEST_PATTERNS)))
+            if args.orphans:
+                plan.add(cleanup.plan_orphans(st, saver))
+            if args.older_than:
+                plan.add(cleanup.plan_older_than(st, saver, cleanup.parse_age(args.older_than)))
+
+        summary = plan.summary()
+        if not args.yes:
+            _p({"dry_run": True, **summary})
+            if plan.objects or plan.threads:
+                print("\nDry run: nothing deleted. Add --yes to delete the above.")
+            return 0
+        _p({"dry_run": False, **summary, **cleanup.execute(st, saver, plan)})
+    return 0
+
+
 def cmd_graph(args) -> int:
     from .graph import mermaid
 
@@ -296,13 +384,18 @@ def main(argv: list[str] | None = None) -> int:
     k = sub.add_parser("kit", help="build and cache a style kit for a template")
     k.add_argument("template")
     k.add_argument("--out", help="also write the kit to this file")
+    k.add_argument("--make-default", action="store_true",
+                   help="make this template config/agent.json's default_template")
     k.set_defaults(fn=cmd_kit)
 
     c = sub.add_parser("create", help="create a deck")
     c.add_argument("id", help="the deck session id (= the conversation)")
     c.add_argument("brief")
     c.add_argument("--template", help="a .pptx path or an s3:// URI")
-    c.add_argument("--content", help="content pack JSON: the facts the deck may use")
+    c.add_argument("--context", action="append", metavar="FILE",
+                   help="a document the deck should be based on (.md .txt .docx ...). "
+                        "Repeatable. The facts are written from it; see the gather node")
+    c.add_argument("--content", help="a ready-made content pack JSON, instead of --context")
     c.add_argument("--outline", help="use this ready-made outline instead of calling a model")
     c.set_defaults(fn=cmd_create)
 
@@ -345,6 +438,31 @@ def main(argv: list[str] | None = None) -> int:
     g.add_argument("uri")
     g.add_argument("path")
     g.set_defaults(fn=cmd_get)
+
+    ls = sub.add_parser("ls", help="list the bucket")
+    ls.add_argument("prefix", nargs="?", help="e.g. my-deck/ ; omit for the top level")
+    ls.add_argument("-r", "--recursive", action="store_true", help="every object, not folders")
+    ls.set_defaults(fn=cmd_ls)
+
+    cl = sub.add_parser(
+        "clean", help="delete decks and their sessions, tidy them, or clear everything",
+        description="With no option: show what is there. Every option is a dry run until --yes.\n"
+                    "A deck is its files AND its conversation; both are always cleaned together.",
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    cl.add_argument("--deck", action="append", default=[], metavar="ID",
+                    help="purge this deck (files + session). Repeatable; shell patterns work: 'demo-*'")
+    cl.add_argument("--tidy", action="store_true",
+                    help="keep each deck usable but drop older runs' previews, plans and ops "
+                         "(all decks, or only those named with --deck)")
+    cl.add_argument("--tests", action="store_true", help="what the test suites left behind")
+    cl.add_argument("--orphans", action="store_true",
+                    help="files with no session, and sessions whose files are gone")
+    cl.add_argument("--older-than", metavar="AGE", help="purge decks untouched for e.g. 7d, 12h")
+    cl.add_argument("--all", action="store_true", help="the whole bucket and every session")
+    cl.add_argument("--keep-templates", action="store_true",
+                    help="with --all: keep kits/ and uploads/ (ingested templates)")
+    cl.add_argument("--yes", action="store_true", help="actually delete")
+    cl.set_defaults(fn=cmd_clean)
 
     args = ap.parse_args(argv)
     return args.fn(args)

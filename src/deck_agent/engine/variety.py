@@ -156,3 +156,96 @@ def spread(jobs: list[dict]) -> tuple[list[dict], list[dict]]:
         used[kind] = used.get(kind, 0) + 1
         recent.append(kind)
     return jobs, changes
+
+
+# --------------------------------------------------------------------------- the layout budget
+#
+# The passes above reorder and re-ask; they never stop the deck reaching for the same three
+# layouts, because when only three layouts can hold the content, every re-ask lands on one of
+# them. A template with six layouts and a twelve-slide deck *will* repeat - unless some slides
+# are not taken from the template at all.
+#
+# So: each template layout has a budget (`layout_reuse`, default 2 per deck), and a layout is
+# never used on two slides in a row. A slide over budget is not squeezed into the over-used
+# layout; it becomes a *designed* slide - drawn by model-written code, as a diagram chosen for
+# its content, on the template's own header, footer, colours and type. The template stays the
+# look of the deck; it stops being the only shape the deck can take.
+
+def budget(chosen: list[str | None], limit: int) -> list[int]:
+    """Which slides go over the layout budget. -> their indices.
+
+    `chosen[i]` is slide i's layout (None when it has none). The cover keeps its layout; a
+    slide is over budget when its layout has already been used `limit` times, or when it is the
+    same layout as the slide before it (the repetition a reader notices first).
+    """
+    if limit <= 0:
+        return []
+    used: dict[str, int] = {}
+    over, previous = [], None
+    for i, name in enumerate(chosen):
+        if name is None:
+            previous = None
+            continue
+        base = name.split("@")[0]
+        if base in FIXED:
+            previous = base
+            continue
+        if used.get(base, 0) >= limit or base == previous:
+            over.append(i)
+            previous = None            # the designed slide breaks the run
+            continue
+        used[base] = used.get(base, 0) + 1
+        previous = base
+    return over
+
+
+#: What a designed slide can be drawn as. Each is a recognisable diagram a person would draw
+#: by hand for that kind of content, and every one is buildable from python-pptx autoshapes.
+FORMS = {
+    "process flow": "chevrons or arrows left to right, one step per shape, a line of text under each",
+    "timeline": "a horizontal line with dated or numbered markers and a short label at each",
+    "staircase": "steps rising left to right, each step a block with its point, the last highest",
+    "hub and spoke": "a central circle with the theme, points in smaller shapes around it, joined by lines",
+    "2x2 matrix": "four quadrants with axis labels, one point in each quadrant",
+    "side-by-side contrast": "two tall panels facing each other, a heading on each, points listed under",
+    "big numbers": "two to four large figures in a row, each with a one-line label beneath",
+    "layered stack": "horizontal bands stacked top to bottom, like an architecture diagram, one layer per point",
+    "pyramid": "a triangle cut into bands, the most important point at the top",
+    "cycle": "points placed around a circle with curved arrows between them",
+    "icon grid": "a grid of rounded tiles, each with a small coloured shape, a heading and one line",
+    "statement": "one large sentence across the slide with a coloured accent bar and two or three supporting lines",
+}
+
+#: Which forms suit which kind of content (the outline's `kind`), best first.
+SUITS = {
+    "sequence": ["process flow", "timeline", "staircase", "cycle"],
+    "comparison": ["side-by-side contrast", "2x2 matrix", "big numbers"],
+    "numbers": ["big numbers", "staircase", "icon grid"],
+    "list": ["hub and spoke", "layered stack", "icon grid", "pyramid", "cycle"],
+    "text": ["statement", "layered stack", "hub and spoke"],
+    "closing": ["statement", "big numbers"],
+    "table": ["side-by-side contrast", "icon grid"],
+    "chart": ["big numbers", "staircase"],
+}
+
+
+def assign_forms(contents: list[dict]) -> list[str]:
+    """A different diagram for each designed slide, suited to its content where possible.
+
+    Deterministic, so the code for every designed slide can be written in parallel and still
+    come out varied: each slide takes the first form for its kind that the deck has not used
+    yet, and only when all of those are taken, the least-used form overall.
+    """
+    used: dict[str, int] = {}
+    out = []
+    for content in contents:
+        kind = str(content.get("kind") or "list")
+        n_points = len(content.get("points") or [])
+        candidates = SUITS.get(kind, SUITS["list"])
+        if n_points > 4:
+            candidates = [f for f in candidates if f not in ("2x2 matrix", "big numbers")] or candidates
+        fresh = [f for f in candidates if not used.get(f)]
+        pick = fresh[0] if fresh else min(FORMS, key=lambda f: (used.get(f, 0), f not in candidates))
+        used[pick] = used.get(pick, 0) + 1
+        out.append(pick)
+    return out

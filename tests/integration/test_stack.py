@@ -15,8 +15,9 @@ pytestmark = pytest.mark.integration
 
 # --------------------------------------------------------------------------- object storage
 
-def test_objects_round_trip(needs_stack, tmp_path, sample_deck):
+def test_objects_round_trip(needs_stack, tmp_path, sample_deck, scratch_keys):
     store = S3Store(needs_stack)
+    scratch_keys.append("tests/round-trip.pptx")
     uri = store.put(sample_deck, "tests/round-trip.pptx")
     assert Ref.parse(uri).key == "tests/round-trip.pptx"
     assert store.exists(uri)
@@ -26,15 +27,17 @@ def test_objects_round_trip(needs_stack, tmp_path, sample_deck):
     assert sha256_file(back) == sha256_file(sample_deck)
 
 
-def test_json_round_trips_without_mangling_unicode(needs_stack):
+def test_json_round_trips_without_mangling_unicode(needs_stack, scratch_keys):
     store = S3Store(needs_stack)
+    scratch_keys.append("tests/unicode.json")
     payload = {"title": "Résultats du troisième trimestre", "n": 3, "nested": {"a": [1, 2]}}
     uri = store.put_json(payload, "tests/unicode.json")
     assert store.get_json(uri) == payload
 
 
-def test_listing_is_by_prefix(needs_stack):
+def test_listing_is_by_prefix(needs_stack, scratch_keys):
     store = S3Store(needs_stack)
+    scratch_keys += ["tests/listing/one.json", "tests/listing/two.json"]
     store.put_json({"a": 1}, "tests/listing/one.json")
     store.put_json({"a": 2}, "tests/listing/two.json")
     listed = store.list("tests/listing/")
@@ -42,9 +45,10 @@ def test_listing_is_by_prefix(needs_stack):
     assert all(Ref.parse(u).key.startswith("tests/listing/") for u in listed)
 
 
-def test_a_presigned_link_works_and_the_bare_url_does_not(needs_stack):
+def test_a_presigned_link_works_and_the_bare_url_does_not(needs_stack, scratch_keys):
     """The deck never leaves the bucket; a link is how a person gets at it."""
     store = S3Store(needs_stack)
+    scratch_keys.append("tests/presign.json")
     uri = store.put_json({"hello": "deck"}, "tests/presign.json")
     signed = store.url(uri, seconds=120)
     assert urllib.request.urlopen(signed, timeout=20).read() == b'{\n "hello": "deck"\n}'
@@ -65,17 +69,16 @@ def test_a_missing_object_is_a_clear_failure(needs_stack):
 
 # --------------------------------------------------------------------------- the checkpointer
 
-def test_a_conversation_survives_a_new_graph_and_a_new_pool(needs_stack, template):
+def test_a_conversation_survives_a_new_graph_and_a_new_pool(needs_stack, template, scratch_deck, scratch_keys):
     """The point of Postgres: the next turn may be answered by a different process."""
-    import uuid
-
     from deck_agent import facade
     from deck_agent.llm.planner import StubAgentPlanner
 
-    deck_id = f"test-persist-{uuid.uuid4().hex[:8]}"
+    deck_id = scratch_deck("persist")
     planner = StubAgentPlanner()
     store = S3Store(needs_stack)
     template_uri = store.put(template, f"uploads/{sha256_file(template)}-template.pptx")
+    scratch_keys.append(Ref.parse(template_uri).key)
 
     outline = {"title": "T", "footer": "f", "slides": [
         {"purpose": "p", "kind": "sequence", "title": "How it went",
@@ -102,17 +105,16 @@ def test_a_conversation_survives_a_new_graph_and_a_new_pool(needs_stack, templat
     assert len(after["versions"]) == 2
 
 
-def test_an_interrupt_can_be_resumed_by_a_later_call(needs_stack, template):
+def test_an_interrupt_can_be_resumed_by_a_later_call(needs_stack, template, scratch_deck, scratch_keys):
     """`interrupt()` is only worth anything if the answer may arrive much later."""
-    import uuid
-
     from deck_agent import facade
     from deck_agent.llm.planner import StubAgentPlanner
 
-    deck_id = f"test-interrupt-{uuid.uuid4().hex[:8]}"
+    deck_id = scratch_deck("interrupt")
     planner = StubAgentPlanner()
     store = S3Store(needs_stack)
     template_uri = store.put(template, f"uploads/{sha256_file(template)}-template.pptx")
+    scratch_keys.append(Ref.parse(template_uri).key)
     outline = {"title": "T", "footer": "f", "slides": [
         {"purpose": "p", "kind": "sequence", "title": "How it went",
          "points": [{"heading": "One", "text": "First."}, {"heading": "Two", "text": "Second."},

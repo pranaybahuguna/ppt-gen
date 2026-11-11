@@ -167,7 +167,7 @@ def test_every_run_leaves_a_manifest_that_explains_it(offline_settings, uploaded
     assert manifest["route"] == "create"
     assert manifest["engine"]["commit"], "a delivered deck must say which engine built it"
     assert manifest["kit"] and manifest["template_id"]
-    assert [entry["node"] for entry in manifest["trace"]][:3] == ["intake", "route", "ensure_kit"]
+    assert [entry["node"] for entry in manifest["trace"]][:4] == ["intake", "route", "gather", "ensure_kit"]
     assert manifest["settings"]["render_backend"] == "off"
 
 

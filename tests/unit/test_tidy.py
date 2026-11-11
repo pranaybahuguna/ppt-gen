@@ -156,3 +156,60 @@ def test_the_empty_panel_really_is_gone_from_the_built_deck(template, hand_kit, 
                  and not any(p["text"].strip() for p in s.get("paras", []))
                  and _is_panel(s["geom"])]
     assert not survivors, f"an empty panel survived into the deck: {[s['ref'] for s in survivors]}"
+
+
+# --------------------------------------------------------------------------- empty fields' furniture
+
+def _shape(sid, kind, x, y, w, h, text=""):
+    inch = 914400
+    return {"ref": f"slide:1/shape:{sid}", "kind": kind,
+            "geom": {"x": int(x * inch), "y": int(y * inch), "w": int(w * inch), "h": int(h * inch)},
+            "paras": [{"text": text}] if text else []}
+
+
+def test_an_empty_fields_tick_and_rule_go_with_it():
+    """Four points, one used: the other three ticks must not hang over nothing."""
+    from deck_agent.engine.tidy import companion_steps
+
+    shapes = [_shape(2, "placeholder", 0.5, 0.4, 11, 0.9, "Title")]
+    pattern = {"fields": {"title": 2, "page": 99}, "keep": []}
+    for i, x in enumerate((1, 4, 7)):
+        box, tick, rule = 10 + i * 10, 11 + i * 10, 12 + i * 10
+        shapes += [_shape(box, "text", x, 5.5, 2.3, 0.7, "text"),
+                   _shape(tick, "picture", x, 4.9, 0.4, 0.4),
+                   _shape(rule, "other", x, 6.6, 2.3, 0)]
+        pattern["fields"][f"point_{i}"] = box
+    shapes.append(_shape(50, "picture", 0, 0, 13.3, 7.5))          # a background photo
+    shapes.append(_shape(99, "text", 12, 6.9, 0.4, 0.3, "4"))        # the page number
+    steps = companion_steps(pattern, {"shapes": shapes}, filled={2, 10, 99})
+    gone = {s["target"] for s in steps}
+    assert gone == {"shape:21", "shape:22", "shape:31", "shape:32"}
+    assert "shape:11" not in gone, "a filled field keeps its tick"
+    assert "shape:50" not in gone, "a big shape is design, not furniture"
+
+
+def test_nothing_goes_when_every_field_is_filled():
+    from deck_agent.engine.tidy import companion_steps
+
+    shapes = [_shape(10, "text", 1, 5.5, 2.3, 0.7, "t"), _shape(11, "picture", 1, 4.9, 0.4, 0.4)]
+    assert companion_steps({"fields": {"a": 10}}, {"shapes": shapes}, filled={10}) == []
+
+
+def test_the_fit_check_sees_text_inside_a_group(tmp_path):
+    """The check used to walk only the top of the slide; grouped text was never measured."""
+    from pptx import Presentation
+    from pptx.util import Inches
+
+    from deck_agent.engine.deck import check
+
+    prs = Presentation()
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    group = slide.shapes.add_group_shape()
+    box = group.shapes.add_textbox(Inches(1), Inches(5), Inches(1.6), Inches(0.6))
+    box.text_frame.word_wrap = True
+    box.text_frame.text = ("Visual defect checks: vision review found both project visual defects "
+                           "and reported nothing on a clean deck.")
+    path = tmp_path / "grouped.pptx"
+    prs.save(path)
+    findings = check(path)["findings"]
+    assert any(f["kind"] == "overflow" for f in findings), findings

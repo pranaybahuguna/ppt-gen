@@ -10,6 +10,8 @@ would otherwise be copied into each of them, and they hold two rules in one plac
 """
 from __future__ import annotations
 
+import re
+
 import time
 import uuid
 from pathlib import Path
@@ -93,6 +95,65 @@ def style_brief(kit: dict, index: dict) -> dict:
         "title_pt": round(float(title_pt), 1),
         "body_pt": round(float(body_pt), 1),
     }
+
+
+def design_frame(kit: dict, template_index: dict) -> dict:
+    """Where a designed slide is drawn: the template's own content-slide frame.
+
+    A slide drawn on a blank layout looks pasted in from another deck - no header band, no
+    footer, no logo. So it is drawn on the layout the template's content slides actually use
+    (their header, title box and footer come with it), and inside the area those slides keep
+    for content: the union of every content box on the kit's example slides, minus the title
+    and the page number.
+
+    -> {"chrome_layout": {"master": m, "layout": l, "name": ...} | None,
+        "body_box": {"x", "y", "w", "h"} in EMU}
+    """
+    from collections import Counter
+
+    slides = template_index["slides"]
+    content_patterns = [p for name, p in (kit.get("patterns") or {}).items()
+                        if name.split("@")[0] not in ("cover", "closing")]
+    names = Counter(slides[p["slide"] - 1].get("layout") for p in content_patterns
+                    if 0 < p["slide"] <= len(slides))
+    chrome = None
+    if names:
+        wanted = names.most_common(1)[0][0]
+        for lay in template_index.get("layouts") or []:
+            if lay.get("name") == wanted:
+                m = re.match(r"M(\d+)L(\d+)", str(lay.get("id", "")))
+                if m:
+                    chrome = {"master": int(m.group(1)), "layout": int(m.group(2)), "name": wanted}
+                break
+
+    from ..engine.tidy import _all_shapes
+
+    size = template_index["slide_size"]
+    xs, ys, x2s, y2s = [], [], [], []
+    for p in content_patterns:
+        if not 0 < p["slide"] <= len(slides):
+            continue
+        shapes = _all_shapes(slides[p["slide"] - 1])
+        ids = [sid for name, sid in p["fields"].items() if name not in ("title", "page", "footer")]
+        if "items" in p:
+            ids += [sid for group in p["items"]["groups"] for sid in group]
+        for sid in ids:
+            g = (shapes.get(sid) or {}).get("geom")
+            if g and g["w"] and g["h"]:
+                xs.append(g["x"]); ys.append(g["y"])
+                x2s.append(g["x"] + g["w"]); y2s.append(g["y"] + g["h"])
+    if xs:
+        # Inside the margins the template's own title keeps, and clear of its footer line: a
+        # kit's boxes can run nearer the edge than a drawn diagram should.
+        margin = int(size["w"] * 0.035)
+        foot = int(size["h"] * 0.9)
+        left, right = max(min(xs), margin), min(max(x2s), size["w"] - margin)
+        top, bottom = min(ys), min(max(y2s), foot)
+        box = {"x": left, "y": top, "w": right - left, "h": bottom - top}
+    else:                                         # no kit to learn from: a sensible default
+        box = {"x": int(size["w"] * 0.06), "y": int(size["h"] * 0.2),
+               "w": int(size["w"] * 0.88), "h": int(size["h"] * 0.68)}
+    return {"chrome_layout": chrome, "body_box": box}
 
 
 def blank_layout_index(index: dict) -> int:

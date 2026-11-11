@@ -129,3 +129,50 @@ def needs_stack():
     except Exception as e:
         pytest.skip(f"Postgres is not available ({e.__class__.__name__}). Run: make up && make init")
     return s
+
+
+@pytest.fixture
+def scratch_deck(needs_stack):
+    """A deck id for one test, purged afterwards - files and session both.
+
+    Tests that write to the real bucket and the real Postgres used to leave their decks behind,
+    one `test-persist-<hex>` per run; after a day of work that was most of the bucket. The
+    purge runs even when the test fails, and a purge that fails is reported, not raised, so it
+    never hides the test's own result. `deckops clean --tests` catches anything left over from
+    a run that was killed before this could run.
+    """
+    import uuid
+
+    made: list[str] = []
+
+    def new(kind: str = "test") -> str:
+        deck_id = f"test-{kind}-{uuid.uuid4().hex[:8]}"
+        made.append(deck_id)
+        return deck_id
+
+    yield new
+
+    from deck_agent.infra import cleanup
+    from deck_agent.infra.checkpointer import checkpointer
+    from deck_agent.infra.storage import S3Store
+
+    try:
+        with checkpointer(needs_stack) as saver:
+            cleanup.execute(S3Store(needs_stack), saver,
+                            cleanup.plan_purge(S3Store(needs_stack), saver, made))
+    except Exception as e:                       # noqa: BLE001
+        print(f"could not clean up {made}: {e}")
+
+
+@pytest.fixture
+def scratch_keys(needs_stack):
+    """Object keys a storage test writes; deleted afterwards."""
+    from deck_agent.infra.storage import S3Store, Ref
+
+    keys: list[str] = []
+    yield keys
+    st = S3Store(needs_stack)
+    try:
+        st.delete([Ref(st.bucket, k).uri for k in keys])
+    except Exception as e:                       # noqa: BLE001
+        print(f"could not clean up {keys}: {e}")

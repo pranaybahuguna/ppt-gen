@@ -82,7 +82,11 @@ class DeckState(TypedDict, total=False):
     outline: dict | None        # stage 1: what each slide says
     plan: dict | None           # stage 2: which layout, with what in it
     edit_actions: list[dict] | None
-    pending_code: list[dict]    # slides no layout can hold
+    content_pack: dict | None   # the facts the deck may state - written by `gather` from
+    context_docs: list[str]     #   the request and these documents, unless supplied
+    plan_jobs: list[int] | None # plan slide i holds outline slide plan_jobs[i]
+    pending_code: list[dict]    # slides owed to code: reworks (over the layout budget,
+                                #   already in the deck) and slides no layout can hold
     extra_ops: list[dict]       # deterministic repair ops (the font fallback)
     changelog: list[dict]
 
@@ -93,9 +97,9 @@ class DeckState(TypedDict, total=False):
     previews: list[str]
     repair_round: int
 
-    # the escape hatch
+    # model-written code
     code_attempt: int
-    code_slides: list[dict]
+    code_slides: list[dict]     # each slide's code and context, kept so a rebuild redraws it
     code_feedback: list[str]
 
     # a person in the loop

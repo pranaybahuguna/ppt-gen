@@ -9,11 +9,15 @@ that can be deleted at any moment without losing anything.
 What goes in here:
 
     <thread>/v001.pptx            every version of the deck (never overwritten: that is undo)
-    <thread>/kits/<hash>.json     a style kit, keyed by the template's content hash
     <thread>/<run>/outline.json   intermediate artefacts, so a run can be replayed or debugged
     <thread>/<run>/plan.json
     <thread>/<run>/ops.json
     <thread>/<run>/previews/slide-01.png
+    kits/<hash>.json              a style kit, keyed by the template's content hash
+    uploads/<hash>-<name>.pptx    templates and decks handed in
+
+Deleting any of it goes through `infra/cleanup.py`, which removes a deck's files and its
+checkpointed conversation together.
 
 In development this is MinIO in a container; in production it is whatever S3 the host app
 already has, with the same two settings changed. `MemoryStore` is the same interface with a
@@ -73,6 +77,19 @@ class Ref:
         return cls(u.netloc, u.path.lstrip("/"))
 
 
+@dataclass(frozen=True)
+class Obj:
+    """One object, as a listing reports it: enough to decide whether to keep it."""
+
+    uri: str
+    size: int
+    modified: float          # unix seconds
+
+    @property
+    def key(self) -> str:
+        return Ref.parse(self.uri).key
+
+
 class Store:
     """The interface the graph uses. Two implementations: S3Store and MemoryStore."""
 
@@ -85,6 +102,8 @@ class Store:
     def get_bytes(self, uri: str) -> bytes: ...
     def exists(self, uri: str) -> bool: ...
     def list(self, prefix: str) -> list[str]: ...
+    def objects(self, prefix: str) -> list["Obj"]: ...
+    def delete(self, uris: list[str]) -> int: ...
     def url(self, uri: str, seconds: int = 3600) -> str: ...
 
     # -- convenience shared by both implementations ------------------------------------
@@ -164,16 +183,35 @@ class S3Store(Store):
             return False
 
     def list(self, prefix: str) -> list[str]:
+        return [o.uri for o in self.objects(prefix)]
+
+    def objects(self, prefix: str) -> list[Obj]:
         out, token = [], None
         while True:
             kw = {"Bucket": self.bucket, "Prefix": prefix}
             if token:
                 kw["ContinuationToken"] = token
             page = self._client.list_objects_v2(**kw)
-            out += [Ref(self.bucket, o["Key"]).uri for o in page.get("Contents", [])]
+            out += [Obj(Ref(self.bucket, o["Key"]).uri, o["Size"], o["LastModified"].timestamp())
+                    for o in page.get("Contents", [])]
             if not page.get("IsTruncated"):
                 return out
             token = page["NextContinuationToken"]
+
+    def delete(self, uris: list[str]) -> int:
+        """Delete objects, a thousand per request (the S3 limit). Returns how many went."""
+        keys = [Ref.parse(u).key for u in uris]
+        gone = 0
+        for i in range(0, len(keys), 1000):
+            batch = [{"Key": k} for k in keys[i:i + 1000]]
+            resp = self._client.delete_objects(Bucket=self.bucket,
+                                               Delete={"Objects": batch, "Quiet": True})
+            errors = resp.get("Errors") or []
+            if errors:
+                raise Boundary(f"object storage refused to delete {len(errors)} object(s), "
+                               f"e.g. {errors[0].get('Key')}: {errors[0].get('Message')}")
+            gone += len(batch)
+        return gone
 
     def url(self, uri: str, seconds: int = 3600) -> str:
         """A link the caller can hand to a browser. The deck itself never leaves the bucket."""
@@ -188,6 +226,7 @@ class MemoryStore(Store):
     def __init__(self, bucket: str = "memory"):
         self.bucket = bucket
         self._data: dict[str, bytes] = {}
+        self._modified: dict[str, float] = {}
         self._lock = threading.Lock()
 
     def ensure_bucket(self) -> None:
@@ -197,8 +236,11 @@ class MemoryStore(Store):
         return self.put_bytes(Path(local).read_bytes(), key)
 
     def put_bytes(self, data: bytes, key: str) -> str:
+        import time
+
         with self._lock:
             self._data[key] = bytes(data)
+            self._modified[key] = time.time()
         return Ref(self.bucket, key).uri
 
     def get(self, uri: str, local: str | Path) -> Path:
@@ -219,6 +261,22 @@ class MemoryStore(Store):
 
     def list(self, prefix: str) -> list[str]:
         return sorted(Ref(self.bucket, k).uri for k in self._data if k.startswith(prefix))
+
+    def objects(self, prefix: str) -> list[Obj]:
+        with self._lock:
+            return sorted((Obj(Ref(self.bucket, k).uri, len(v), self._modified.get(k, 0.0))
+                           for k, v in self._data.items() if k.startswith(prefix)),
+                          key=lambda o: o.uri)
+
+    def delete(self, uris: list[str]) -> int:
+        gone = 0
+        with self._lock:
+            for u in uris:
+                k = Ref.parse(u).key
+                if self._data.pop(k, None) is not None:
+                    self._modified.pop(k, None)
+                    gone += 1
+        return gone
 
     def url(self, uri: str, seconds: int = 3600) -> str:
         return uri

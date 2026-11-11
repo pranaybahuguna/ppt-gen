@@ -104,6 +104,7 @@ def unique_shape_ids(src: str | Path, dst: str | Path) -> dict:
                 nxt += 1
 
     stats = save_preserving(prs, str(src), str(dst))
+    stable_zip(dst)
     touched = sorted({c["slide"] for c in changes})
     unsafe = [c for c in changes if c["renumbered_a_top_level_shape"]]
     return {"slides_touched": touched, "ids_renumbered": len(changes),
@@ -182,3 +183,25 @@ def prepare(src: str | Path, dst: str | Path) -> dict:
     report["duplicate_ids_before"] = {str(k): v for k, v in problems.items()}
     report["changed"] = report["ids_renumbered"] > 0
     return report
+
+
+def stable_zip(path: str | Path) -> None:
+    """Same input, same bytes: zip entries stamped with a fixed time, not the clock's.
+
+    A prepared template's content hash is its kit's cache key. Preparing the same template at
+    10:01 and at 10:02 must give the same hash, or a template that needs preparing gets its
+    kit built again for every deck made from it.
+    """
+    import zipfile
+
+    path = Path(path)
+    with zipfile.ZipFile(path) as src:
+        entries = [(info, src.read(info.filename)) for info in src.infolist()]
+    tmp = path.with_name(path.name + ".stable")
+    with zipfile.ZipFile(tmp, "w") as dst:
+        for info, data in entries:
+            fixed = zipfile.ZipInfo(info.filename, date_time=(2000, 1, 1, 0, 0, 0))
+            fixed.compress_type = info.compress_type
+            fixed.external_attr = info.external_attr
+            dst.writestr(fixed, data)
+    tmp.replace(path)

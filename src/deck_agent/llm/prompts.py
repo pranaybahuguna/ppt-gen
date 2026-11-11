@@ -101,21 +101,53 @@ Rules:
     {"actions": [], "cannot": "<one sentence saying what you would need>"}"""
 
 
-CODE_SYSTEM = """You write Python that draws ONE slide, for the rare case where no layout in the
-template can hold the content.
+CODE_SYSTEM = """You write Python that turns ONE slide of a business deck into a diagram.
 
-This is a fallback. The deck's other slides were built by copying the template's own example
-slides, so your slide must look like it belongs with them: use only the colours, fonts and sizes
-given in ctx["style"], line things up on a sensible grid, and leave generous margins.
+The deck is built from a corporate template. Usually you are given a slide that is already in
+the deck (ctx["target_slide"]), built from one of the template's layouts and carrying its
+content - but that layout is already used enough in this deck, so this slide must not look
+like the others. Rework it: present its content as the diagram named in ctx["form"]
+(ctx["form_hint"] says what that looks like). If that diagram genuinely cannot show this
+content, pick another that can - never one in ctx["avoid_forms"].
+
+ctx["shapes"] lists what is on the slide now:
+  * role "title", "page" and "frame" are the template's title, page number, header and footer
+    art: leave them exactly as they are - they are what makes this slide belong to the deck
+  * role "content" is the slide's current layout: move, resize, restyle, reuse or delete
+    those shapes, and add new ones, to build the diagram. Reusing the template's own shapes
+    (a styled card, an icon) where they fit is good; leaving a half-used layout behind is not.
+
+Find shapes by id: shapes = {{sh.shape_id: sh for sh in slide.shapes}}; delete one with
+sh._element.getparent().remove(sh._element).
+
+The diagram:
+  * inside ctx["body_box"]; at least 0.15 inch between shapes. The top of that box can sit
+    over the header picture - the template's own cards do - so anything there needs a solid
+    fill (white or a palette colour), never bare text on the picture
+  * only the colours in ctx["style"]["palette"] (and white, and its text colour), and its font;
+    a filled shape gets white or the text colour for its text, whichever reads better
+  * body text no smaller than 11pt and no larger than ctx["style"]["body_pt"]; short labels in
+    shapes, never paragraphs crammed into a small shape
+  * real shapes: chevrons, arrows, circles, rounded rectangles, connectors (MSO_SHAPE,
+    MSO_CONNECTOR) - a diagram, not a list of text boxes
+
+Make it look designed, not generated: one clear focal element, even spacing on a grid,
+consistent sizes for things of the same kind, enough white space that nothing feels packed.
+Size every text box for its text - wrap long lines, and give a box two lines of height when its
+text needs two. Every point in ctx["content"] must be on the slide, and nothing that is not.
+
+(When ctx["target_slide"] is null the slide does not exist yet: add it on ctx["chrome_layout"]
+and set slide.shapes.title.)
 
 {contract}
 
-Output JSON: {{"code": "<the module>", "explanation": "<one sentence: what the slide looks like>"}}
+Output JSON: {{"code": "<the module>", "form": "<the diagram you drew>",
+               "explanation": "<one sentence: what the slide looks like>"}}
 
 Your code runs with no network, no filesystem and no subprocesses, in a container that is thrown
-away afterwards. Its output is then checked for text overflow and overlapping boxes exactly like
-every other slide, and if it fails those checks you will be asked again with the reason. Keep the
-slide simple enough to be correct: a handful of boxes, measured positions, no clever tricks.
+away afterwards. Its output is checked for text overflow and overlapping text boxes exactly like
+every other slide, and a vision model looks at the rendered slide; if either finds a problem you
+will be asked again with the reason.
 
 If "feedback" is given, your previous code was rejected or produced a bad slide: fix exactly
 what it says."""
@@ -144,3 +176,36 @@ Return JSON:
 {"ok": <true if a person would be happy to present this slide>,
  "problems": [{"what": "<what is wrong, one line>", "where": "<which part of the slide>",
                "severity": "high"|"low"}]}"""
+
+
+GATHER_SYSTEM = """You prepare the material for a slide deck. A person has asked for a deck and
+given you some context - notes, a document, a few paragraphs. Your job is to turn that context
+into the FACTS the deck may state. You do not write slides; a later step does, using only what
+you return here.
+
+Input JSON: {"request": "<what the person asked for>",
+             "sources": [{"name": "<where it came from>", "text": "<the context>"}]}
+
+Return JSON:
+{"facts": [{"text": "<one self-contained statement, under 30 words, plain wording>",
+            "quote": "<the exact words in the source that support it, copied verbatim,
+                       between 3 and 40 words>",
+            "source": "<source name> > <nearest section heading, if any>"}],
+ "datasets": {"<short_id>": {"columns": ["..."], "rows": [["..."]],
+                             "source": "<source name> > <section>"}},
+ "gaps": ["<something the request needs that the sources do not say>"]}
+
+Rules:
+* Every fact must be supported by its quote. Quotes are checked against the source character
+  for character (formatting marks and spacing ignored); a fact whose quote is not found is
+  thrown away. Copy, do not paraphrase, inside "quote".
+* Cover the whole source, every major section, weighted towards what the request is about.
+  Aim for 12 to 40 facts; fewer if the source is short.
+* Keep numbers, names, units and product terms exactly as written. Never combine figures from
+  different places into a new one, and never round.
+* Nothing from your own knowledge. If the context is thin, return fewer facts and say what is
+  missing in "gaps" rather than filling it in.
+* A table of numbers becomes a dataset (numbers as numbers). Anything else - including a
+  table of words - becomes facts.
+* Code, commands and file listings are not facts unless the point of the deck is that code;
+  state what they show instead, quoting the prose around them where you can."""

@@ -191,6 +191,75 @@ def orphan_steps(pattern: dict, example_slide: dict, filled: set[int]) -> list[d
     return steps
 
 
+EMU_PER_IN = 914400
+COMPANION_MAX = int(0.8 * EMU_PER_IN)   # an icon or a rule, not a panel (same bound as the kit's)
+COMPANION_GAP = int(0.6 * EMU_PER_IN)   # how close it must sit to the field it belongs to
+
+
+def _all_shapes(example_slide: dict) -> dict[int, dict]:
+    """Every shape on the example slide by id, groups opened up."""
+    out: dict[int, dict] = {}
+
+    def walk(shapes):
+        for sh in shapes:
+            try:
+                out[int(sh["ref"].rsplit("shape:", 1)[1])] = sh
+            except (KeyError, ValueError, IndexError):
+                pass
+            walk(sh.get("children") or [])
+
+    walk(example_slide["shapes"])
+    return out
+
+
+def _gap(a: dict, b: dict) -> float:
+    """Shortest distance between two boxes; 0 when they touch or overlap."""
+    import math
+
+    dx = max(0, a["x"] - (b["x"] + b["w"]), b["x"] - (a["x"] + a["w"]))
+    dy = max(0, a["y"] - (b["y"] + b["h"]), b["y"] - (a["y"] + a["h"]))
+    return math.hypot(dx, dy)
+
+
+def companion_steps(pattern: dict, example_slide: dict, filled: set[int]) -> list[dict]:
+    """Delete the icons and rules that belong to a field this slide leaves empty.
+
+    A layout's text boxes come with small furniture: a tick above each point, a rule under it,
+    an arrow beside a label. `orphan_steps` only removes decoration that *encloses* an empty
+    field, and leaves pictures and kept decoration alone - so a slide that used one of four
+    points showed three ticks over nothing. Here a small shape with no words is matched to the
+    field it sits nearest, and goes when that field is left empty. Big shapes (panels,
+    backgrounds, photos) are never touched, and nor is anything nearer a field that is filled.
+    """
+    shapes = _all_shapes(example_slide)
+    named = {sid for name, sid in pattern["fields"].items() if name not in ("page", "footer")}
+    empty = {sid for sid in named if sid not in filled}
+    if not empty:
+        return []
+    fields = set(pattern["fields"].values())
+    if "items" in pattern:
+        fields |= {sid for group in pattern["items"]["groups"] for sid in group}
+    # The page number is furniture itself; a rule that happens to sit near the slide's foot
+    # belongs to the text above it, not to the page number beside it.
+    furniture = {sid for name, sid in pattern["fields"].items() if name in ("page", "footer")}
+    boxes = {sid: shapes[sid]["geom"] for sid in fields - furniture
+             if sid in shapes and shapes[sid].get("geom")}
+
+    steps = []
+    for sid, shape in shapes.items():
+        geom = shape.get("geom")
+        if sid in fields or not geom or shape.get("kind") == "placeholder":
+            continue
+        if any(p["text"].strip() for p in shape.get("paras", [])):
+            continue
+        if max(geom["w"], geom["h"]) > COMPANION_MAX and min(geom["w"], geom["h"]) > EMU_PER_IN // 20:
+            continue                     # neither small nor a thin rule: part of the design
+        nearest = min(boxes, key=lambda f: _gap(geom, boxes[f]), default=None)
+        if nearest in empty and _gap(geom, boxes[nearest]) <= COMPANION_GAP:
+            steps.append({"op": "delete_shape", "target": f"shape:{sid}"})
+    return steps
+
+
 def remove_orphans(ops: list[dict], plan: dict, index: dict, kit: dict) -> tuple[list[dict], int]:
     """Add the orphan deletions to a compiled op list. -> (ops, how many were added)"""
     added = 0
@@ -204,8 +273,9 @@ def remove_orphans(ops: list[dict], plan: dict, index: dict, kit: dict) -> tuple
         filled = _filled_ids(plan_slide, pattern)
         existing = {s.get("target") for s in op.get("steps", []) if s.get("op") == "delete_shape"}
         claimed = _claimed_ids(pattern)
-        extra = orphan_steps(pattern, example, filled) + unused_item_steps(
-            pattern, example, len(plan_slide.get("items") or []), claimed)
+        extra = (orphan_steps(pattern, example, filled)
+                 + companion_steps(pattern, example, filled)
+                 + unused_item_steps(pattern, example, len(plan_slide.get("items") or []), claimed))
         for step in extra:
             if step["target"] not in existing:
                 existing.add(step["target"])
@@ -278,9 +348,16 @@ def renumber_pages(src, dst, fmt: str = "{n} / {total}") -> dict:
         for shape in slide.shapes:
             if not getattr(shape, "has_text_frame", False):
                 continue
-            if not PAGE_TEXT.match(shape.text_frame.text or ""):
+            text = shape.text_frame.text or ""
+            if PAGE_TEXT.match(text):
+                wanted = fmt.format(n=position, total=total)
+            elif _is_slide_number(shape) and BARE_NUMBER.match(text):
+                # A template that numbers its slides with a bare figure in the slide-number
+                # box: the compiler wrote the plan's number into it, which is wrong as soon as
+                # a designed slide is inserted in front of it.
+                wanted = str(position)
+            else:
                 continue
-            wanted = fmt.format(n=position, total=total)
             paragraph = shape.text_frame.paragraphs[0]
             if paragraph.runs:
                 # Write into the first run and clear the rest, so the run's own formatting -
@@ -297,3 +374,40 @@ def renumber_pages(src, dst, fmt: str = "{n} / {total}") -> dict:
             missing.append(position)
     stats = save_preserving(prs, str(src), str(dst))
     return {"renumbered": renumbered, "without_page_number": missing, "parts": stats}
+
+
+BARE_NUMBER = re.compile(r"^\s*\d+\s*$")
+
+
+def _is_slide_number(shape) -> bool:
+    try:
+        return shape.is_placeholder and int(shape.placeholder_format.type) == 13   # SLIDE_NUMBER
+    except (AttributeError, ValueError):
+        return False
+
+
+def add_slide_number(src, position: int, dst) -> bool:
+    """Give a drawn slide the page number its layout has a box for. -> whether one was added.
+
+    python-pptx's `add_slide` copies a layout's title and body placeholders but not its date,
+    footer or slide-number boxes, so a slide drawn by code arrives with no page number while
+    every slide around it has one. The layout says where it goes and how it looks; this puts it
+    there, holding the slide's position, which `renumber_pages` keeps right from then on.
+    """
+    bootstrap()
+    from pptx import Presentation
+
+    from deckops.executor import save_preserving
+
+    prs = Presentation(str(src))
+    slide = prs.slides[position]
+    if any(_is_slide_number(sh) for sh in slide.placeholders):
+        return False
+    source = next((ph for ph in slide.slide_layout.placeholders if _is_slide_number(ph)), None)
+    if source is None:
+        return False
+    slide.shapes.clone_placeholder(source)
+    added = next(sh for sh in slide.placeholders if _is_slide_number(sh))
+    added.text_frame.text = str(position + 1)
+    save_preserving(prs, str(src), str(dst))
+    return True

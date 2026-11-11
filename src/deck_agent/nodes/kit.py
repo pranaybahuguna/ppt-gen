@@ -9,6 +9,11 @@ So the cache key is the template's **content hash**, and the cache is the bucket
 every thread: `kits/<hash>.json`. A new template is built once, by whoever asks first; the same
 template byte-for-byte is never built twice. A changed template has a different hash and so
 gets a new kit, with no invalidation logic to get wrong.
+
+With `single_kit` on, `kits/` holds exactly one kit: the template last ingested with `deckops
+kit`, which replaces whatever was there. Nothing else writes to `kits/` then. A deck made from
+any other template still gets a kit - it cannot be built without one - but the kit is kept
+beside that deck (`<deck>/kit-<hash>.json`) and goes when the deck is purged.
 """
 from __future__ import annotations
 
@@ -55,7 +60,8 @@ def ensure_kit(state: DeckState, planner=None, log=print) -> dict:
         template_id = template_fingerprint(local)
         cached = f"s3://{st.bucket}/{kit_key(template_id)}"
 
-        if state.get("kit") and state.get("template_id") == template_id:
+        if (state.get("kit") and state.get("template_id") == template_id
+                and st.exists(state["kit"])):
             kit = st.get_json(state["kit"])
             return {"kit_patterns": sorted(kit["patterns"]),
                     "trace": [step("ensure_kit", outcome="already in state")]}
@@ -82,7 +88,12 @@ def ensure_kit(state: DeckState, planner=None, log=print) -> dict:
                 "route_reason": "I could not learn anything reusable from this template.",
                 "trace": [step("ensure_kit", outcome="no patterns")],
             }
-        kit_uri = st.put_json(kit, kit_key(template_id))
+        if s.single_kit:
+            kit_uri = ws.publish_json(kit, f"kit-{template_id}.json", versioned=True)
+            log("  kit: kept with this deck - single_kit is on, and only `deckops kit` "
+                "replaces the shared one")
+        else:
+            kit_uri = st.put_json(kit, kit_key(template_id))
         ws.publish_json(report, "kit_report.json")
         return {
             "kit": kit_uri, "template": template, "template_id": template_id,

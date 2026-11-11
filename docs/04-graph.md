@@ -1,40 +1,80 @@
 # 4. The graph
 
 ```mermaid
+---
+config:
+  flowchart:
+    curve: linear
+---
 graph TD;
-  __start__ --> intake;
-  intake --> route;
-  route -.-> ask;
-  route -.-> ensure_kit;
-  route -.-> translate_plan;
-  route -.-> edit_plan;
-  route -.-> custom_code;
-  route -.-> decline;
-  ask --> route;
-  ensure_kit -.-> outline;
-  ensure_kit -.-> ask;
-  ensure_kit -.-> decline;
-  outline -.-> approve_outline;
-  outline -.-> decline;
-  approve_outline -.-> render_slides;
-  approve_outline -.-> decline;
-  render_slides -.-> assemble;
-  render_slides -.-> custom_code;
-  render_slides -.-> decline;
-  assemble --> look;
-  edit_apply --> look;
-  translate_apply --> look;
-  look -.-> deliver;
-  look -.-> repair;
-  look -.-> custom_code;
-  look -.-> translate_repair;
-  repair --> assemble;
-  translate_plan -.-> translate_apply;
-  translate_repair --> translate_apply;
-  edit_plan -.-> edit_apply;
-  custom_code -.-> deliver;
-  deliver --> __end__;
-  decline --> __end__;
+	__start__([<p>__start__</p>]):::first
+	intake(intake)
+	route(route)
+	ask(ask)
+	decline(decline)
+	gather(gather)
+	ensure_kit(ensure_kit)
+	outline(outline)
+	approve_outline(approve_outline)
+	render_slides(render_slides)
+	assemble(assemble)
+	repair(repair)
+	translate_plan(translate_plan)
+	translate_apply(translate_apply)
+	translate_repair(translate_repair)
+	edit_plan(edit_plan)
+	edit_apply(edit_apply)
+	look(look)
+	custom_code(custom_code)
+	deliver(deliver)
+	__end__([<p>__end__</p>]):::last
+	__start__ --> intake;
+	approve_outline -.-> decline;
+	approve_outline -.-> render_slides;
+	ask --> route;
+	assemble --> look;
+	custom_code -.-> deliver;
+	custom_code -.-> repair;
+	edit_apply --> look;
+	edit_plan -.-> ask;
+	edit_plan -.-> decline;
+	edit_plan -.-> edit_apply;
+	ensure_kit -.-> ask;
+	ensure_kit -.-> decline;
+	ensure_kit -.-> outline;
+	gather -.-> ask;
+	gather -.-> decline;
+	gather -.-> ensure_kit;
+	intake --> route;
+	look -.-> ask;
+	look -.-> custom_code;
+	look -.-> decline;
+	look -.-> deliver;
+	look -.-> repair;
+	look -.-> translate_repair;
+	outline -.-> approve_outline;
+	outline -.-> ask;
+	outline -.-> decline;
+	render_slides -.-> assemble;
+	render_slides -.-> custom_code;
+	render_slides -.-> decline;
+	repair --> assemble;
+	route -.-> ask;
+	route -.-> custom_code;
+	route -.-> decline;
+	route -.-> edit_plan;
+	route -.-> gather;
+	route -.-> translate_plan;
+	translate_apply --> look;
+	translate_plan -.-> ask;
+	translate_plan -.-> decline;
+	translate_plan -.-> translate_apply;
+	translate_repair --> translate_apply;
+	decline --> __end__;
+	deliver --> __end__;
+	classDef default fill:#f2f0ff,line-height:1.2
+	classDef first fill-opacity:0
+	classDef last fill:#bfb6fc
 ```
 
 `make graph` prints this from the code, so it cannot drift.
@@ -65,12 +105,14 @@ is a function you can read and test, and each node adds one `trace` entry.
 
 | Function | In | Decides |
 |---|---|---|
-| `nodes.after_route` | `router.py` | create / edit / translate / custom / ask / decline |
+| `nodes.after_route` | `router.py` | create (→ gather) / edit / translate / custom / ask / decline |
+| `nodes.after_gather` | `gather.py` | enough facts → ensure_kit; too little context → ask |
 | `graph.after_ensure_kit` | `graph.py` | got a kit → outline; no template → ask |
 | `nodes.after_approval` | `create.py` | approved → build; not → decline |
-| `nodes.after_render` | `create.py` | something placed → assemble; nothing → the escape hatch |
+| `nodes.after_render` | `create.py` | something placed → assemble; nothing → custom_code |
 | `graph.after_look` | `graph.py` | sends each route to its own decision, after the slides have been looked at |
-| `nodes.after_assemble` | `create.py` | clean → deliver; fixable → repair; owed a drawn slide → custom_code |
+| `nodes.after_assemble` | `create.py` | fixable → repair (first); owed reworks or drawn slides → custom_code; clean → deliver |
+| `nodes.after_code` | `custom_code.py` | deliver; repair only if template slides still have findings and rounds are left |
 | `nodes.after_translate` | `translate.py` | clean → deliver; overflow and rounds left → repair |
 | `nodes.after_edit` | `edit.py` | deliver, or decline with a reason |
 
@@ -84,10 +126,21 @@ ensure_kit → outline → approve_outline → render_slides → assemble ⇄ re
                                          custom_code
 ```
 
+**gather** - what the deck may say, written from whatever the person brought: the request
+itself (notes are often pasted straight into it) and any documents passed as `context`
+(Markdown, text, CSV, JSON, Word). One model call per chunk of context returns facts, each with
+the verbatim words that support it; code then looks for those words in the source and drops any
+fact whose quote is not there. The result is the content pack - `content_pack.json` in the run
+folder, with `gather_report.json` beside it listing what was dropped and what the request needed
+that the context did not say. Fewer than three facts and it asks for more context rather than
+building a thin deck. A content pack supplied by the caller skips the node.
+
 **ensure_kit** - a tested style kit for the template, cached by the template's **content hash**
 in `kits/<hash>.json`, shared by every session. A template is learned once by whoever asks
 first; the same bytes are never learned twice; a changed template has a different hash, so
-there is no invalidation logic to get wrong.
+there is no invalidation logic to get wrong. With `single_kit` on, only `deckops kit` writes
+to `kits/`, and a kit built here for any other template is kept beside the deck instead
+(see docs/07, "One kit at a time").
 
 **outline** (stage 1, one call) - what each slide *says*: purpose, kind, title, points, figures,
 sources. No layouts, no field names.
@@ -103,8 +156,13 @@ known to fit has no room to.
 
 Failure is classified here, which the engine's own `plan_slides` does not do: "the model keeps
 producing an invalid plan" (a real failure) is not the same as "no layout in this template can
-hold this" (not the model's fault, and what the escape hatch is for). A no-fit slide is
+hold this" (not the model's fault, and what model-written code is for). A no-fit slide is
 remembered with the position it should occupy.
+
+Then the **layout budget** (`layout_reuse`, `engine/variety.budget`): a layout used past its
+budget, or on the slide right after itself, is not used *as it is* again. The slide stays in the
+plan, built from that layout, and is marked to be reworked into a diagram - one per slide, all
+different, chosen by `engine/variety.assign_forms` for the slide's kind of content.
 
 Before anything is drawn by code, `engine/fallback.py` relaxes the rules one named step at a
 time. This is not a rare path: in the bundled template, *a cover slide with a title and a
@@ -260,10 +318,17 @@ counts those shapes and the edit says so.
 A colour it cannot resolve is refused, not guessed: `RRGGBB`, or one of a short list of names a
 person actually types ("dark red", "grey").
 
-### custom_code - the escape hatch
+### custom_code - model-written slides
 
-Reached for one well-defined reason: the deterministic path produced a slide's content but no
-layout can hold it, and the relaxed fallback found nothing either.
+Reached for two reasons. **Reworks**: slides over the layout budget, already in the deck in
+their template layout, which the code turns into a diagram in place - keeping the template's
+title, header, footer and page number, told exactly what is on the slide. And **no fit**: the
+deterministic path produced a slide's content but no layout can hold it, even relaxed; the code
+adds that slide, and it is moved into place. First drafts for every slide are written in
+parallel; each is then run, checked and looked at one at a time, and sent back with what was
+wrong, up to `code_attempts` tries. A rework that never passes leaves the slide in its template
+layout. Template slides are repaired *before* this node runs, so no repair rebuild undoes it.
+docs/06 has the detail.
 
 Four fences, in order:
 
