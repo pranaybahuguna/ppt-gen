@@ -22,11 +22,25 @@ TEST_DATA = {"test_data": {"source": "acceptance test", "columns": ["Category", 
 
 
 def dummy(n_chars: int) -> str:
-    out, i = [], 0
-    while len(" ".join(out)) < n_chars:
-        out.append(WORDS[i % len(WORDS)])
-        i += 1
-    return " ".join(out).capitalize()
+    """Placeholder text of *at most* `n_chars`, as close to it as whole words allow.
+
+    "At most" is the whole point. The acceptance test asks one question - does this pattern
+    hold content like its example's? - and then answers it with text of the example's length.
+    Overshooting makes the test ask something harder than it claims to, and the error is worst
+    where it matters most: a 12-character title came back as 16, a third longer, and the layout
+    was dropped because that tipped a one-line heading box onto a second line. Short strings
+    are exactly where templates are tightest.
+
+    The capacity measurement still asks for more on purpose, by passing `stretch`; that stays
+    deliberate rather than accidental.
+    """
+    out: list[str] = []
+    for i in range(400):
+        word = WORDS[i % len(WORDS)]
+        if out and len(" ".join([*out, word])) > n_chars:
+            break
+        out.append(word)
+    return (" ".join(out)[:max(1, n_chars)]).capitalize()
 
 
 def _example_text(shape: dict) -> list[str]:

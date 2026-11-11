@@ -29,7 +29,8 @@ from pptx.opc.constants import RELATIONSHIP_TYPE as RT
 
 from .ops import (AddSlide, AddSlideFromPattern, DeleteShape, DeleteSlide, DuplicateShape, OpList, SetDocProperties,
                   SetChart, SetFontSize, SetGeometry, SetParagraphText, SetRunText, SetShapeText, SetTable)
-from .refs import Ref, RefError, TagError, find_shape_el, para_runs, para_text, para_tokens, parse_tagged, resolve, sha
+from .refs import (Ref, RefError, TagError, find_shape_el, para_runs, para_text, para_tokens,
+                   parse_tagged, resolve, sha, to_own, to_slide)
 
 PHASE = {SetParagraphText: 0, SetRunText: 0, SetFontSize: 1, SetGeometry: 1, DeleteShape: 2, AddSlide: 3,
          AddSlideFromPattern: 3, DeleteSlide: 4, SetDocProperties: 5}
@@ -123,8 +124,22 @@ def _layout(prs, layout_id):
 
 # ---- copying a slide ------------------------------------------------------------
 
-_NO_CLONE = {RT.CHART, RT.DIAGRAM_DATA, RT.DIAGRAM_LAYOUT, RT.DIAGRAM_COLORS, RT.DIAGRAM_QUICK_STYLE,
-             RT.OLE_OBJECT, RT.PACKAGE}
+# A slide holding one of these cannot be copied, because `clone_slide` shares the part rather
+# than duplicating it, and for these that is wrong: two slides pointing at one chart part means
+# editing either edits both, and the same goes for a diagram's data, layout and colours.
+_NO_CLONE = {RT.CHART, RT.DIAGRAM_DATA, RT.DIAGRAM_LAYOUT, RT.DIAGRAM_COLORS, RT.DIAGRAM_QUICK_STYLE}
+
+# An embedded object is different, and treating it like a chart made whole templates unusable.
+# Commercial decks are routinely built with add-ins - think-cell above all - that park an inert
+# data blob on every slide ("think-cell data - do not delete"). Nothing on the slide reads it,
+# nothing the engine does writes it, and sharing one such part between two slides is ordinary
+# OOXML. Refusing to copy any slide carrying one meant refusing the entire template: on the
+# first real one tried, every slide had it.
+#
+# So an embedded object no longer blocks copying. It is still never *edited* - `probe` marks it
+# opaque - and `compile_from_kit` drops it from the copy, so a new deck does not inherit
+# somebody else's add-in data.
+_SHAREABLE = {RT.OLE_OBJECT, RT.PACKAGE}
 
 
 def _sid(target: str) -> int:
@@ -200,6 +215,21 @@ def _fill_paragraphs(txBody, texts):
         txBody.append(p)
 
 
+def _write_geometry(el, spec):
+    """Put a shape where the caller means, whatever space the shape's XML is written in.
+
+    Positions arrive in slide coordinates, because that is the only space in which "put this
+    box beside that one" means anything. A shape nested in a group stores its position in the
+    group's own space, so it has to be converted back on the way in - see deckops/refs.py.
+    """
+    xfrm = el.find(".//" + qn("a:xfrm"))
+    x, y, w, h = to_own(el, spec.x, spec.y, spec.w, spec.h)
+    xfrm.find(qn("a:off")).set("x", str(x))
+    xfrm.find(qn("a:off")).set("y", str(y))
+    xfrm.find(qn("a:ext")).set("cx", str(w))
+    xfrm.find(qn("a:ext")).set("cy", str(h))
+
+
 def _apply_step(slide, st):
     tree = slide.shapes._spTree
     if isinstance(st, DuplicateShape):
@@ -208,15 +238,25 @@ def _apply_step(slide, st):
         c = dup.find(".//" + qn("p:cNvPr"))
         c.set("id", str(st.new_id))
         c.set("name", f"{c.get('name', 'Shape')} copy {st.new_id}")
+        # The copy is appended to the slide, not to whatever group the original sits in, so
+        # its geometry has to be rewritten from the original's own space into the slide's -
+        # otherwise a shape duplicated out of a group lands wherever those coordinates happen
+        # to point, which is usually off the slide.
+        x = _xfrm(dup) if dup.find(".//" + qn("a:xfrm")) is not None else None
+        if x is not None:
+            off, ext = x.find(qn("a:off")), x.find(qn("a:ext"))
+            if off is not None and ext is not None:
+                sx, sy, sw, sh = to_slide(src, int(off.get("x")), int(off.get("y")),
+                                          int(ext.get("cx")), int(ext.get("cy")))
+                off.set("x", str(sx)); off.set("y", str(sy))
+                ext.set("cx", str(sw)); ext.set("cy", str(sh))
         tree.append(dup)
         return
     el = find_shape_el(slide, _sid(st.target))
     if isinstance(st, DeleteShape):
         el.getparent().remove(el)
     elif isinstance(st, SetGeometry):
-        x = _xfrm(el)
-        x.find(qn("a:off")).set("x", str(st.x)); x.find(qn("a:off")).set("y", str(st.y))
-        x.find(qn("a:ext")).set("cx", str(st.w)); x.find(qn("a:ext")).set("cy", str(st.h))
+        _write_geometry(el, st)
     elif isinstance(st, SetShapeText):
         _fill_paragraphs(el.find(qn("p:txBody")), st.paragraphs)
     elif isinstance(st, SetChart):
@@ -370,9 +410,7 @@ def _apply(prs, op, b, warnings):
         for e in b["el"].iter(qn("a:endParaRPr")):
             e.set("sz", sz)
     elif isinstance(op, SetGeometry):
-        xfrm = b["el"].find(".//" + qn("a:xfrm"))
-        xfrm.find(qn("a:off")).set("x", str(op.x)); xfrm.find(qn("a:off")).set("y", str(op.y))
-        xfrm.find(qn("a:ext")).set("cx", str(op.w)); xfrm.find(qn("a:ext")).set("cy", str(op.h))
+        _write_geometry(b["el"], op)
     elif isinstance(op, DeleteShape):
         b["el"].getparent().remove(b["el"])
     elif isinstance(op, DeleteSlide):

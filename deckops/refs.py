@@ -210,3 +210,65 @@ def resolve(prs, ref: Ref):
     if ref.run >= len(runs):
         raise RefError(f"{ref}: run out of range")
     return "run", runs[ref.run], slide
+
+
+# ---- group coordinate spaces ---------------------------------------------------------
+# A shape inside a group states its position in that group's *child* coordinate space, not
+# the slide's. The group says how the two relate:
+#
+#     <a:off x  y>  <a:ext cx cy>        where the group sits on the slide, and how big
+#     <a:chOff x y> <a:chExt cx cy>      the coordinate space its children are drawn in
+#
+#     slide_x = off.x + (child_x - chOff.x) * ext.cx / chExt.cx
+#
+# Everything that reasons about where a shape *is* - which boxes repeat, what overlaps what,
+# how many lines fit - needs slide coordinates, so `probe` reports them. Everything that
+# *writes* a position back has to convert the other way, because the shape's own XML must stay
+# in its own space. `to_slide` and `to_own` are those two directions.
+
+def group_transform(shape_el):
+    """How this shape's own coordinates map to slide coordinates.
+
+    -> (ax, bx, ay, by), meaning slide_x = ax * own_x + bx and slide_y = ay * own_y + by.
+    For a shape sitting directly on the slide this is the identity, which is the common case
+    and costs one parent lookup.
+    """
+    ax = ay = 1.0
+    bx = by = 0.0
+    node = shape_el.getparent()
+    while node is not None and node.tag == qn("p:grpSp"):
+        xfrm = node.find(qn("p:grpSpPr") + "/" + qn("a:xfrm"))
+        if xfrm is None:
+            break
+        off, ext = xfrm.find(qn("a:off")), xfrm.find(qn("a:ext"))
+        ch_off, ch_ext = xfrm.find(qn("a:chOff")), xfrm.find(qn("a:chExt"))
+        if None in (off, ext, ch_off, ch_ext):
+            break
+        try:
+            sx = int(ext.get("cx")) / int(ch_ext.get("cx"))
+            sy = int(ext.get("cy")) / int(ch_ext.get("cy"))
+        except (TypeError, ValueError, ZeroDivisionError):
+            break
+        tbx = int(off.get("x")) - int(ch_off.get("x")) * sx
+        tby = int(off.get("y")) - int(ch_off.get("y")) * sy
+        # Compose: this group maps the space we are already in to the one above it.
+        ax, bx = sx * ax, sx * bx + tbx
+        ay, by = sy * ay, sy * by + tby
+        node = node.getparent()
+    return ax, bx, ay, by
+
+
+def to_slide(shape_el, x, y, w, h):
+    """A shape's own geometry, in slide coordinates."""
+    ax, bx, ay, by = group_transform(shape_el)
+    return (int(round(ax * x + bx)), int(round(ay * y + by)),
+            int(round(ax * w)), int(round(ay * h)))
+
+
+def to_own(shape_el, x, y, w, h):
+    """Slide coordinates, in the space this shape's own XML is written in."""
+    ax, bx, ay, by = group_transform(shape_el)
+    if not ax or not ay:
+        return x, y, w, h
+    return (int(round((x - bx) / ax)), int(round((y - by) / ay)),
+            int(round(w / ax)), int(round(h / ay)))

@@ -9,7 +9,7 @@ from pptx import Presentation
 from pptx.enum.shapes import MSO_SHAPE_TYPE, PP_PLACEHOLDER
 from pptx.oxml.ns import qn
 
-from .refs import para_runs, para_tagged, para_text, sha, text_body_paragraphs
+from .refs import para_runs, para_tagged, para_text, sha, text_body_paragraphs, to_slide
 
 DGM_URI = "http://schemas.openxmlformats.org/drawingml/2006/diagram"
 CHART_URI = "http://schemas.openxmlformats.org/drawingml/2006/chart"
@@ -47,8 +47,16 @@ def _paragraphs(base_ref: str, txBody):
 
 
 def _geom(shape):
+    """Where the shape is, in slide coordinates.
+
+    A shape inside a group states its position in that group's child coordinate space, which
+    is meaningless to anything comparing it with the rest of the slide. `to_slide` converts it;
+    for a shape sitting directly on the slide it is the identity. See deckops/refs.py.
+    """
     try:
-        return {"x": shape.left, "y": shape.top, "w": shape.width, "h": shape.height}
+        x, y, w, h = to_slide(shape._element, int(shape.left or 0), int(shape.top or 0),
+                              int(shape.width or 0), int(shape.height or 0))
+        return {"x": x, "y": y, "w": w, "h": h}
     except Exception:
         return None
 

@@ -357,12 +357,14 @@ def compile_from_kit(plan: dict, index: dict, kit: dict, content: dict | None = 
                     steps.append({**step, "target": f"shape:{sid}"})
 
         # leak guard: any example text the plan didn't claim is removed, and so is every picture
-        # the kit doesn't explicitly keep (a logo is design; a screenshot or diagram is content)
+        # the kit doesn't explicitly keep (a logo is design; a screenshot or diagram is content).
+        # An embedded object goes too: commercial templates carry add-in data blobs (think-cell
+        # above all) on every slide, and a new deck should not inherit somebody else's.
         keep = set(pat.get("keep", []))
         for sid, shp in shapes.items():
             if sid in used or sid in keep or shp.get("kind") == "group":
                 continue
-            if _text_of(shp) or (shp.get("kind") == "picture" and sid not in keep):
+            if _text_of(shp) or shp.get("kind") in ("picture", "ole") and sid not in keep:
                 steps.append({"op": "delete_shape", "target": f"shape:{sid}"})
 
         ops.append({"op": "add_slide_from_pattern", "source": ex["ref"], "steps": steps, "notes": s.get("notes")})
@@ -405,10 +407,21 @@ def leaked_text(index: dict, kit: dict, plan: dict, out_index: dict) -> list[str
     leaks = sorted((example_texts(index, kit) - set(_strings(plan))) & out)
     kept, example_pics = set(), set()
     for p in kit["patterns"].values():
+        # A picture the pattern itself uses is not a leak. Once slides with groups can be used
+        # as patterns, an item is routinely "icon + heading + body" and the icon is a picture
+        # inside the item group: it is meant to be copied, once per item. Only a picture that
+        # belongs to the example slide and that no pattern claims is template content left
+        # behind, which is what this scan is for.
+        claimed = set(p["fields"].values()) | set(p.get("keep", []))
+        if "items" in p:
+            claimed |= {sid for group in p["items"]["groups"] for sid in group}
+        claimed |= set(p.get("charts", {}).values())
+        if "table" in p:
+            claimed.add(p["table"].get("shape"))
         for shp in index["slides"][p["slide"] - 1]["shapes"]:
             if shp.get("image_sha"):
                 sid = int(shp["ref"].rsplit("shape:", 1)[1])
-                (kept if sid in p.get("keep", []) else example_pics).add(shp["image_sha"])
+                (kept if sid in claimed else example_pics).add(shp["image_sha"])
     out_pics = {shp.get("image_sha") for s in out_index["slides"] for shp in s["shapes"] if shp.get("image_sha")}
     leaks += [f"picture {h}" for h in sorted((example_pics - kept) & out_pics)]
     return leaks

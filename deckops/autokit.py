@@ -30,6 +30,8 @@ from pptx.enum.shapes import MSO_SHAPE_TYPE
 from pptx.opc.constants import RELATIONSHIP_TYPE as RT
 from pptx.util import Emu
 
+from .refs import to_slide
+
 TOL = 54864                    # 0.06 inch, in EMU
 PAGE_RE = re.compile(r"^\s*\d{1,3}\s*(/\s*\d{1,3})?\s*$")
 CHART_WORD = re.compile(r"chart|graph", re.I)
@@ -37,12 +39,33 @@ NUMBER_LIKE = re.compile(r"\d")            # a headline value has at least one d
 CHROME = {"title", "subtitle", "page", "footer"}
 
 
+def leaves(shapes):
+    """Every shape that actually draws something, groups opened up.
+
+    A group is a container, not a thing on the slide: what a reader sees is its contents. The
+    rules below reason about position and size - which boxes repeat, what sits beside what -
+    so they need the shapes themselves, with slide coordinates (`S` converts those).
+
+    Without this, a template whose cards are "icon + heading + body, grouped" - which is how
+    most bought templates are built - presents every card as one opaque box with no text, and
+    no pattern can be found.
+    """
+    for sh in shapes:
+        if sh.shape_type == MSO_SHAPE_TYPE.GROUP:
+            yield from leaves(sh.shapes)
+        else:
+            yield sh
+
+
 class S:
     """The facts about one shape that the rules need."""
 
     def __init__(self, sh):
         self.id = sh.shape_id
-        self.x, self.y, self.w, self.h = (int(sh.left or 0), int(sh.top or 0), int(sh.width or 0), int(sh.height or 0))
+        # Slide coordinates, always: a shape inside a group states its position in that
+        # group's own space, which cannot be compared with anything else on the slide.
+        self.x, self.y, self.w, self.h = to_slide(
+            sh._element, int(sh.left or 0), int(sh.top or 0), int(sh.width or 0), int(sh.height or 0))
         self.is_table = bool(getattr(sh, "has_table", False) and sh.has_table)
         self.is_chart = bool(getattr(sh, "has_chart", False) and sh.has_chart)
         self.is_group = sh.shape_type == MSO_SHAPE_TYPE.GROUP
@@ -247,14 +270,14 @@ def item_roles(groups):
 # ---- one slide → one pattern ---------------------------------------------------------------
 
 def slide_pattern(slide, n, total, W, H):
-    shapes = [S(sh) for sh in slide.shapes]
+    shapes = [S(sh) for sh in leaves(slide.shapes)]
     notes = []
     ids = Counter(e.get("id") for e in slide.shapes._spTree.iter("{http://schemas.openxmlformats.org/presentationml/2006/main}cNvPr"))
     if any(c > 1 for c in ids.values()):
         notes.append(f"shapes share ids {sorted(i for i, c in ids.items() if c > 1)}: can't be addressed safely")
         return None, notes
-    if any(s.is_chart for s in shapes) or any(sh.shape_type == MSO_SHAPE_TYPE.GROUP for sh in slide.shapes):
-        notes.append("holds a chart or grouped shapes: can't be used as a pattern yet")
+    if any(s.is_chart for s in shapes):
+        notes.append("holds a chart: can't be used as a pattern yet")
         return None, notes
     chrome = find_chrome(shapes, W, H)
     used = set(chrome.values())
@@ -361,6 +384,46 @@ USE_FOR = {
 }
 
 
+#: A picture thinner than this in either direction is an icon, a logo or a rule - decoration,
+#: whatever else is true of it. 0.8 inch: the logos and icons on real templates measure
+#: 0.34-0.77 inch, and the content photographs 3-6 inch.
+ICON_EMU = 731520
+
+
+def _decorative(sh, sha, often, W, H):
+    """Is this picture part of the template's look, rather than content on an example slide?
+
+    The question matters because a pattern copies its example slide: decoration has to come
+    with it, and content must not. Getting it wrong in one direction leaves somebody's
+    architecture diagram in every new deck; in the other it strips the logo, the icons and the
+    cover photograph and the slide stops looking like the template at all.
+
+    Frequency alone - "on at least half the slides" - was the original test, and it is right
+    about a logo repeated throughout. It is wrong about everything that appears once by design.
+    On a real commercial template it stripped the cover photograph, the logo, an icon inside a
+    circle and a row of tick marks, and the acceptance test's vision check caught each one by
+    name. So two more signals, both about what the picture *is* rather than how often it turns
+    up:
+
+    * **small** - an icon or a logo. Nothing that reads as content is a third of an inch tall.
+    * **bleeds** - it runs off the edge of the slide. Content sits inside the page; artwork
+      that runs past the trim is there to be looked through, not read.
+
+    What is still removed: a picture of real size, sitting inside the page, that appears once.
+    That is the screenshot or the diagram the rule was written for.
+    """
+    if sha in often:
+        return True
+    try:
+        x, y, w, h = to_slide(sh._element, int(sh.left or 0), int(sh.top or 0),
+                              int(sh.width or 0), int(sh.height or 0))
+    except Exception:
+        return False
+    if min(w, h) < ICON_EMU:
+        return True
+    return x < 0 or y < 0 or x + w > W or y + h > H
+
+
 def _pic_sha(sh):
     import hashlib
     try:
@@ -374,7 +437,8 @@ def draft_kit(path: str, template_name: str, dedupe: bool = True) -> dict:
     # a picture that appears on at least half the slides is decoration (e.g. a logo); others are content
     seen = Counter()
     for slide in prs.slides:
-        seen.update({_pic_sha(sh) for sh in slide.shapes if sh.shape_type == MSO_SHAPE_TYPE.PICTURE} - {None})
+        seen.update({_pic_sha(sh) for sh in leaves(slide.shapes)
+                     if sh.shape_type == MSO_SHAPE_TYPE.PICTURE} - {None})
     decoration = {h for h, c in seen.items() if c >= max(2, len(prs.slides) / 2)}
     W, H = prs.slide_width, prs.slide_height
     total = len(prs.slides)
@@ -386,8 +450,11 @@ def draft_kit(path: str, template_name: str, dedupe: bool = True) -> dict:
         if not res:
             continue
         name, p = res
-        keep = [sh.shape_id for sh in slide.shapes
-                if sh.shape_type == MSO_SHAPE_TYPE.PICTURE and _pic_sha(sh) in decoration]
+        # `leaves`, not `slide.shapes`: once slides with groups can be patterns, the icons are
+        # inside the groups, and a picture that never reaches this list can never be kept.
+        keep = [sh.shape_id for sh in leaves(slide.shapes)
+                if sh.shape_type == MSO_SHAPE_TYPE.PICTURE
+                and _decorative(sh, _pic_sha(sh), decoration, W, H)]
         if keep:
             p["keep"] = keep
         if "page" in p["fields"]:
