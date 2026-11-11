@@ -1,0 +1,149 @@
+"""Configuration, in one place.
+
+Two kinds of setting, deliberately kept apart (deckops hard rule 6):
+
+* **Model settings** - base URL, model name, API key - come *only* from a git-ignored JSON
+  file (`llm.json`), never from the environment and never from code. Nothing about a model
+  endpoint is ever committed.
+* **Infrastructure settings** - Postgres DSN, S3 endpoint, image name, limits - come from
+  `config/agent.json` if it exists, and may be overridden by environment variables
+  (`DECKOPS_<FIELD>`) so that `docker compose` can wire the containers together.
+
+`redacted()` is what you print.
+"""
+from __future__ import annotations
+
+import json
+import os
+from dataclasses import asdict, dataclass, fields
+from pathlib import Path
+
+REPO = Path(__file__).resolve().parents[2]
+CONFIG_FILE = REPO / "config" / "agent.json"
+
+
+def _env(name: str, default):
+    raw = os.environ.get(name)
+    if raw is None or raw == "":
+        return default
+    if isinstance(default, bool):
+        return raw.strip().lower() in ("1", "true", "yes", "on")
+    if isinstance(default, int):
+        return int(raw)
+    if isinstance(default, float):
+        return float(raw)
+    return raw
+
+
+@dataclass
+class Settings:
+    # ---- object storage: every artefact of record lives here, not on a local disk ----
+    s3_endpoint: str = "http://localhost:9000"
+    s3_region: str = "us-east-1"
+    s3_bucket: str = "deckops"
+    s3_access_key: str = "deckops"
+    s3_secret_key: str = "deckops-dev-secret"
+    store_backend: str = "s3"              # s3 | memory (tests, and one-shot runs with no containers)
+
+    # ---- checkpointer: the conversation's state, one thread per deck session ----
+    pg_dsn: str = "postgresql://deckops:deckops-dev-secret@localhost:55432/deckops"
+    checkpointer: str = "postgres"              # postgres | memory (tests, one-shot CLI runs)
+
+    # ---- the sandbox image: throwaway containers for model code and for rendering ----
+    sandbox_image: str = "deckops/sandbox:0.1.0"
+    docker_bin: str = "docker"
+    render_backend: str = "docker"              # docker | local (soffice on PATH) | off
+    code_runner: str = "docker"                 # docker | off  (never "local": it is untrusted code)
+    sandbox_memory: str = "2g"
+    sandbox_cpus: str = "2"
+    sandbox_pids: int = 256
+    render_timeout_s: int = 300
+    code_timeout_s: int = 60                    # model-written code gets much less than a render
+    code_memory: str = "512m"
+    font_dir: str = "local/fonts"               # metric-compatible fonts, extracted from the image
+
+    # ---- model: a file path only; the file itself is git-ignored ----
+    llm_file: str = "llm.json"
+    llm_client: str = "openai-compat"           # openai-compat | langchain | stub
+
+    # ---- behaviour ----
+    max_repair_rounds: int = 2
+    render_retries: int = 2
+    render_workers: int = 4
+    code_attempts: int = 2                      # tries the model gets to write working code
+    router_confidence_floor: float = 0.6        # below this the graph asks the user
+    approve_outline: bool = False               # pause for a human before building
+    allow_custom_code: bool = False             # the escape hatch, off until asked for
+    vision_review: bool = False                 # look at each rendered slide with a vision
+                                                # model and feed what it sees back as findings
+    vision_workers: int = 4
+    local_root: str = "local"                   # scratch only; nothing of record lives here
+    default_template: str = ""                  # object URI used when a create request names no template
+
+    def redacted(self) -> dict:
+        out = asdict(self)
+        out["s3_secret_key"] = "***"
+        if "@" in self.pg_dsn:
+            out["pg_dsn"] = "postgresql://***@" + self.pg_dsn.split("@", 1)[1]
+        return out
+
+    def _under(self, *parts) -> Path:
+        p = REPO.joinpath(self.local_root, *parts)
+        p.mkdir(parents=True, exist_ok=True)
+        return p
+
+    @property
+    def workspace_root(self) -> Path:
+        return self._under("workspaces")
+
+    @property
+    def font_path(self) -> Path:
+        d = Path(self.font_dir)
+        return d if d.is_absolute() else REPO / d
+
+    def llm_config(self) -> dict:
+        """The model endpoint, from the git-ignored JSON file."""
+        path = Path(self.llm_file)
+        if not path.is_absolute():
+            path = REPO / path
+        if not path.exists():
+            raise FileNotFoundError(
+                f"{path} not found. Write it as "
+                '{"base_url": "https://...", "model": "...", "api_key": "..."} '
+                "- it is git-ignored on purpose. Or set llm_client=stub for the offline planner."
+            )
+        cfg = json.loads(path.read_text())
+        cfg.pop("$comment", None)
+        return cfg
+
+    @classmethod
+    def load(cls) -> "Settings":
+        """Defaults <- config/agent.json <- environment (DECKOPS_<FIELD>)."""
+        data: dict = {}
+        if CONFIG_FILE.exists():
+            data = json.loads(CONFIG_FILE.read_text())
+            data.pop("$comment", None)
+        known = {f.name for f in fields(cls)}
+        unknown = set(data) - known
+        if unknown:
+            raise ValueError(f"{CONFIG_FILE}: unknown settings {sorted(unknown)}")
+        s = cls(**data)
+        for name in known:
+            setattr(s, name, _env("DECKOPS_" + name.upper(), getattr(s, name)))
+        return s
+
+
+_cached: Settings | None = None
+
+
+def settings() -> Settings:
+    global _cached
+    if _cached is None:
+        _cached = Settings.load()
+    return _cached
+
+
+def reset(new: Settings | None = None) -> None:
+    """Tests only: swap the process-wide settings."""
+    global _cached
+    _cached = new

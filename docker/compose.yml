@@ -1,0 +1,115 @@
+# The three things that run as services. The fourth - the sandbox - is deliberately not one:
+# it is an image, started as a throwaway container for one job and destroyed, so there is
+# nothing to keep running. `docker compose build sandbox` builds it; `make selftest` proves it.
+#
+#   postgres   the checkpointer: the conversation's state, one thread per deck session
+#   s3         object storage: every version of every deck, kits, previews, manifests
+#   sandbox    (build only) python + LibreOffice + poppler + fonts; no network, ever
+#   agent      (optional) the agent itself in a container; see the warning on its socket mount
+#
+# Why SeaweedFS and not MinIO: MinIO's public container images are no longer pullable without
+# a registry account, so a stack built on them does not start from a fresh clone. SeaweedFS is
+# a single small container with an S3 gateway that boto3 drives unchanged - buckets, objects,
+# listings and presigned URLs all behave - and it keeps its data in a volume. The agent talks
+# plain S3 through boto3 (`infra/storage.py`), so pointing it at a real S3, or at MinIO if you
+# have access to it, is two settings and no code.
+#
+# Everything binds to localhost only and the credentials are development ones, written down on
+# purpose so that nothing has to be invented to get started. Do not carry them anywhere real.
+name: deckops
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: deckops-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: deckops
+      POSTGRES_PASSWORD: deckops-dev-secret
+      POSTGRES_DB: deckops
+      POSTGRES_INITDB_ARGS: "--data-checksums"
+    ports:
+      # 55432, not 5432: a developer machine often already has a Postgres, and this stack
+      # should not have to win a fight for the standard port. Inside the compose network the
+      # port is still 5432, which is what the agent container uses.
+      - "127.0.0.1:55432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U deckops -d deckops"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  s3:
+    image: chrislusf/seaweedfs:4.53
+    container_name: deckops-s3
+    restart: unless-stopped
+    # One process providing master, volume, filer and the S3 gateway. Plenty for a development
+    # stack, and it starts in seconds. `-s3.config` is what makes the access key mean something:
+    # without it SeaweedFS accepts any signature, which hides credential mistakes until they
+    # matter. See docker/seaweedfs/s3.json.
+    command: >
+      server -dir=/data -s3 -s3.port=8333
+      -s3.config=/etc/seaweedfs/s3.json
+      -master.volumeSizeLimitMB=1024
+    ports:
+      - "127.0.0.1:9000:8333"     # the S3 API, on the port the agent expects by default
+      - "127.0.0.1:9333:9333"     # the master's status page, for looking at what is stored
+    volumes:
+      - s3data:/data
+      - ./seaweedfs/s3.json:/etc/seaweedfs/s3.json:ro
+    healthcheck:
+      # The S3 gateway answers unauthenticated requests with a 403, which is proof enough that
+      # it is up and enforcing credentials.
+      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:8333 2>&1 | grep -qi 'access\\|xml' || wget -q --spider http://127.0.0.1:9333/cluster/status"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  # Build-only. `docker compose --profile tools run --rm sandbox` runs its self-test: it should
+  # report the network blocked and the root filesystem read-only.
+  sandbox:
+    build:
+      context: ..
+      dockerfile: docker/sandbox.Dockerfile
+    image: deckops/sandbox:0.1.0
+    profiles: ["tools"]
+    network_mode: "none"
+    read_only: true
+    tmpfs:
+      - /tmp:size=256m
+    command: ["python3", "/opt/runner/selftest.py", "/tmp"]
+
+  # Optional: the agent in a container, for a deployment that wants everything containerised.
+  #
+  # WARNING about the socket mount. The agent starts sandbox containers, so inside a container
+  # it needs a way to talk to a Docker daemon, and the simple answer - mounting the host's
+  # socket - gives this container root on the host. That is an acceptable trade in a throwaway
+  # development stack and not an acceptable one anywhere else. In production, replace it with a
+  # daemon the agent is *allowed* to drive (a rootless daemon of its own, a sysbox or Kata
+  # runtime, or a small job service it asks instead). Running the agent on the host, as `make`
+  # does, has none of this problem.
+  agent:
+    build:
+      context: ..
+      dockerfile: docker/agent.Dockerfile
+    image: deckops/agent:0.1.0
+    profiles: ["agent"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      s3:
+        condition: service_healthy
+    environment:
+      DECKOPS_PG_DSN: postgresql://deckops:deckops-dev-secret@postgres:5432/deckops
+      DECKOPS_S3_ENDPOINT: http://s3:8333
+      DECKOPS_SANDBOX_IMAGE: deckops/sandbox:0.1.0
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock   # see the warning above
+      - ../local:/app/local
+    command: ["doctor"]
+
+volumes:
+  pgdata:
+  s3data:

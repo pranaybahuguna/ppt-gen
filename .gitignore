@@ -1,0 +1,34 @@
+# --- never commit -------------------------------------------------------------------
+# Model credentials. The only place they ever live (see src/deck_agent/settings.py);
+# llm.example.json is the committed template.
+llm.json
+.env
+
+# Local machine configuration: endpoints, flags, the default template's object URI.
+# config/agent.example.json is the committed template.
+config/agent.json
+
+# --- generated, never of record -------------------------------------------------------
+# Scratch: temporary workspaces, extracted fonts, sample decks, rendered previews,
+# downloaded artefacts. Everything of record lives in object storage.
+local/
+runs/
+
+# The deckops engine is a clone, used unmodified. `make engine` fetches it;
+# engine/README.md explains why it is not vendored into this repository.
+engine/deckops/
+
+# Decks. They are inputs or outputs, not source.
+*.pptx
+*.potx
+*.pdf
+
+# --- the usual ------------------------------------------------------------------------
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.DS_Store

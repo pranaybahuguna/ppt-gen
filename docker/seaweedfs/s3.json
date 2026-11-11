@@ -1,0 +1,28 @@
+{
+  "_comment": [
+    "S3 identities for the local development stack. Without this file SeaweedFS accepts any",
+    "signature, which is convenient and wrong: the agent's own settings carry an access key, and",
+    "a store that ignores it hides mistakes until something real is pointed at. One identity,",
+    "matching the defaults in src/deck_agent/settings.py.",
+    "These are development credentials and are in the repository on purpose. Nothing here is a",
+    "secret, and nothing here should be carried anywhere that matters."
+  ],
+  "identities": [
+    {
+      "name": "deckops",
+      "credentials": [
+        {
+          "accessKey": "deckops",
+          "secretKey": "deckops-dev-secret"
+        }
+      ],
+      "actions": [
+        "Admin",
+        "Read",
+        "Write",
+        "List",
+        "Tagging"
+      ]
+    }
+  ]
+}

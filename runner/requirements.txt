@@ -1,0 +1,6 @@
+# Inside the sandbox image only. No model client, no cloud SDK, no network client of any kind:
+# nothing in this image is allowed to reach the network.
+python-pptx==1.0.2
+lxml==5.3.0
+Pillow==11.0.0
+XlsxWriter==3.2.0

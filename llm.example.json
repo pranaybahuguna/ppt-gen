@@ -1,0 +1,6 @@
+{
+  "$comment": "Copy to llm.json (git-ignored). Any OpenAI-compatible /v1/chat/completions endpoint.",
+  "base_url": "https://your-gateway.example",
+  "model": "your-model-name",
+  "api_key": ""
+}

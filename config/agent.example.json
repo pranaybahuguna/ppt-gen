@@ -1,0 +1,11 @@
+{
+  "$comment": "Copy to config/agent.json and edit. Every key is optional; see src/deck_agent/settings.py. Model credentials never live here - they go in llm.json.",
+  "s3_endpoint": "http://localhost:9000",
+  "s3_bucket": "deckops",
+  "pg_dsn": "postgresql://deckops:deckops-dev-secret@localhost:55432/deckops",
+  "sandbox_image": "deckops/sandbox:0.1.0",
+  "render_backend": "docker",
+  "code_runner": "docker",
+  "approve_outline": false,
+  "allow_custom_code": false
+}
