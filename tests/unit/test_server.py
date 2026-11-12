@@ -139,7 +139,8 @@ def test_a_deck_gets_a_name_and_a_title_when_none_is_given(client, template_uri)
     job = r.json()
     assert job["status"] == "done", job
     deck_id = job["deck_id"]
-    assert deck_id.startswith("the-support-bot-pilot-for-ops-") and len(deck_id.rsplit("-", 1)[1]) == 6
+    assert deck_id.startswith("the_support_bot_pilot_for_") and len(deck_id.rsplit("_", 1)[1]) == 6, \
+        "five words of the title (here the brief), underscores, and a unique part"
     deck = client.get(f"/decks/{deck_id}").json()
     assert deck["title"] == "The Support Bot Pilot, for ops" and deck["status"] == "ready"
     assert deck["current_file"].endswith("v001.pptx")
@@ -184,3 +185,23 @@ def test_the_command_line_records_its_runs_too(offline_settings, template_uri, p
     deck, jobs = asyncio.run(rows())
     assert deck.status == "ready" and deck.current_file == result["deck"]
     assert [(j.kind, j.status) for j in jobs] == [("create", "done")] and jobs[0].summary
+
+
+@pytest.mark.parametrize("title, stem", [
+    ("Support bot pilot - ops review!", "support_bot_pilot_ops_review"),
+    ("Q3", "q3"),
+    ("   ", "deck"),
+    ("One two three four five six seven", "one_two_three_four_five"),
+])
+def test_deck_names_from_titles(title, stem):
+    name = server.new_deck_id(title)
+    assert name.rsplit("_", 1)[0] == stem and len(name.rsplit("_", 1)[1]) == 6
+    assert server.check_deck_id(name) == name
+    assert server.new_deck_id(title) != name, "two decks with one title get different names"
+
+
+def test_a_title_names_the_deck_when_given(client, template_uri):
+    job = client.post("/decks?wait=true", json={
+        "brief": "something long about the pilot", "title": "Pilot Review for Ops",
+        "template": template_uri, "outline": OUTLINE, "content_pack": CONTENT}).json()
+    assert job["deck_id"].startswith("pilot_review_for_ops_"), job["deck_id"]

@@ -192,13 +192,18 @@ def _plain(obj):
     return json.loads(json.dumps(obj, default=str))
 
 
-def new_deck_id(brief: str) -> str:
-    """A deck name made from the brief: its first words, and a short random part.
+def new_deck_id(title: str) -> str:
+    """A deck name for when none is given: the title's first five words, lower-case, joined by
+    underscores, and a short random part so two decks with the same title never collide.
 
-    `explain the support bot pilot` -> `explain-the-support-bot-pilot-7f3a9c`
+    `Support bot pilot - ops review!` -> `support_bot_pilot_ops_review_7f3a9c`
+
+    Called by: create_deck (the MCP tool) and POST /decks, with the title (or the brief when
+    there is no title).
     """
-    words = re.sub(r"[^a-z0-9]+", "-", brief.lower()).strip("-")[:40].strip("-") or "deck"
-    return f"{words}-{uuid.uuid4().hex[:6]}"
+    words = re.findall(r"[a-z0-9]+", title.lower())[:5]
+    stem = "_".join(words)[:56].rstrip("_") or "deck"
+    return f"{stem}_{uuid.uuid4().hex[:6]}"
 
 
 def check_deck_id(deck_id: str) -> str:
@@ -328,13 +333,14 @@ async def create_deck(brief: str, deck_id: str = "", title: str = "", context: s
                       wait: bool = False) -> dict:
     """Create a new deck (5-10 minutes for about twelve slides).
 
-    brief: what the deck is for. deck_id: its permanent name (made from the brief if empty);
+    brief: what the deck is for. deck_id: its permanent name (made from the title if empty:
+    its first five words joined by underscores, and a short unique part);
     reuse it for every later change. title: a human name (the brief if empty).
     context: notes to base it on (pasted text). context_paths: documents on the server's
     machine (.md .txt .docx ...). template_path: a template other than the default.
     wait: hold until done; otherwise returns a job - poll job_status.
     """
-    deck_id = check_deck_id(deck_id or new_deck_id(brief))
+    deck_id = check_deck_id(deck_id or new_deck_id(title or brief))
     docs = [upload_path(p) for p in context_paths or []]
     if context.strip():
         docs.append(upload("context.md", context.encode()))
@@ -521,7 +527,8 @@ async def rest_create(request: Request) -> Response:
     brief = str(fields.get("brief", "")).strip()
     if not brief:
         raise ValueError("'brief' is required: what the deck is for")
-    deck_id = check_deck_id(str(fields.get("deck_id") or "") or new_deck_id(brief))
+    deck_id = check_deck_id(str(fields.get("deck_id") or "")
+                            or new_deck_id(str(fields.get("title") or "") or brief))
     docs = [upload(n, d) for n, d in files.get("context", [])]
     docs += [upload_path(u) for u in fields.get("context_uris", []) or []]
     if str(fields.get("context", "")).strip():

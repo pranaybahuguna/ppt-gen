@@ -30,6 +30,155 @@ Postgres, so a conversation can carry on later, from another process; every file
 | **S3** (SeaweedFS locally) | every deck version, kit, template, preview and manifest | the state holds only `s3://` references, so any process can resume |
 | **sandbox image** | LibreOffice, poppler, fonts; started with no network, read-only, no capabilities | rendering slides, and running model-written code |
 
+## Diagrams
+
+### 1. A request, end to end
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor U as You (curl or an MCP client)
+    participant API as Server (REST + MCP)
+    participant DB as Postgres: decks, jobs
+    participant W as Worker thread
+    participant G as LangGraph graph
+    participant CP as Postgres: checkpoints
+    participant S3 as S3 bucket
+    participant M as Model endpoint
+    participant SB as Sandbox containers
+
+    U->>API: POST /decks (brief, context.md)
+    API->>S3: put uploads/<hash>-context.md
+    API->>DB: insert decks row (building) and jobs row (queued)
+    API-->>U: 202 {job_id, deck_id}
+    API->>DB: jobs.status = running
+    API->>W: facade.create_deck (asyncio.to_thread)
+    W->>G: invoke, thread_id = deck_id
+    loop every node
+        G->>S3: read inputs, write the run's artefacts
+        G->>M: model calls (gather, outline, one per slide, code, vision)
+        G->>SB: render previews, run model-written code (one container each)
+        G->>CP: save the state (a checkpoint)
+    end
+    G-->>W: result (deck = s3://.../v001.pptx, changelog)
+    W->>S3: delete versions older than keep_versions
+    W->>CP: update deck_versions
+    W-->>API: result + summary
+    API->>DB: jobs: done, summary, log. decks: current_file, ready
+    U->>API: GET /jobs/<job_id>
+    API-->>U: status, summary, download_url
+    U->>API: GET /decks/<deck_id>/download
+    API->>S3: get the latest version
+    API-->>U: the .pptx
+```
+
+### 2. The LangGraph flow, with what each node reads and writes
+
+`run/` is the turn's folder, `<deck_id>/<run_id>/`. After **every** node, LangGraph saves the
+state to Postgres (`checkpoints`, `checkpoint_blobs`, `checkpoint_writes`) - not repeated below.
+
+```mermaid
+flowchart TD
+    start([START]) --> intake
+    intake["<b>intake</b><br/>S3 read: attached decks<br/>(safety-checked, probed)"] --> route
+    route["<b>route</b><br/>rules, or a model when unsure"]
+    route -->|create| gather
+    route -->|edit| edit_plan
+    route -->|translate| translate_plan
+    route -->|unsure| ask
+    route -->|cannot| decline
+    ask["<b>ask</b><br/>interrupt: the state waits in<br/>the checkpoint for an answer"] -->|answer| route
+
+    subgraph create [create]
+        gather["<b>gather</b><br/>S3 read: uploads/ context<br/>S3 write: run/content_pack.json,<br/>run/gather_report.json"] --> ensure_kit
+        ensure_kit["<b>ensure_kit</b><br/>S3 read: kits/hash.json, the template<br/>S3 write when built: the kit,<br/>run/kit_report.json"] --> outline
+        outline["<b>outline</b><br/>S3 write: run/outline.json"] --> approve_outline
+        approve_outline["<b>approve_outline</b><br/>optional interrupt"] --> render_slides
+        render_slides["<b>render_slides</b><br/>S3 write: run/render_attempts.json"] --> assemble
+        assemble["<b>assemble</b><br/>S3 write: run/plan.json, run/ops.json,<br/>deck_id/vNNN.pptx, run/previews/*.png<br/>Sandbox: render"] --> look
+        look["<b>look</b><br/>S3 read: previews (vision_review)"] -->|findings, rounds left| repair
+        repair["<b>repair</b><br/>S3 write: run/repair-N.json"] --> assemble
+        look -->|slides to rework| custom_code
+        custom_code["<b>custom_code</b><br/>Sandbox: run model code, render<br/>S3 write: run/custom-slide-N.py + ctx,<br/>deck_id/vNNN.pptx, previews"]
+    end
+
+    subgraph edit [edit]
+        edit_plan["<b>edit_plan</b><br/>S3 write: run/edit_plan.json"] --> edit_apply
+        edit_apply["<b>edit_apply</b><br/>S3 write: deck_id/vNNN.pptx, previews,<br/>run/plan.json on a layout change"] --> look_e["<b>look</b>"]
+    end
+
+    subgraph translate [translate]
+        translate_plan["<b>translate_plan</b><br/>S3 write: run/translate_plan.json"] --> translate_apply
+        translate_apply["<b>translate_apply</b><br/>S3 write: run/ops-N.json,<br/>deck_id/vNNN.pptx, previews"] --> look_t["<b>look</b>"]
+        look_t -->|overflow| translate_repair["<b>translate_repair</b>"] --> translate_apply
+    end
+
+    look -->|clean| deliver
+    custom_code --> deliver
+    look_e --> deliver
+    look_t --> deliver
+    deliver["<b>deliver</b><br/>S3 write: run/manifest.json<br/>a presigned download link"] --> done([END])
+    decline["<b>decline</b><br/>says why"] --> done
+
+    done -.-> after["<b>after the graph</b> (facade, server)<br/>S3: delete versions beyond keep_versions<br/>Postgres: jobs done/failed + summary,<br/>decks current_file + status"]
+```
+
+### 3. The tables
+
+```mermaid
+erDiagram
+    decks ||--o{ jobs : "has many"
+    decks ||--o{ checkpoints : "deck_id = thread_id (by name)"
+    checkpoints ||--o{ checkpoint_blobs : "thread_id"
+    checkpoints ||--o{ checkpoint_writes : "thread_id, checkpoint_id"
+
+    decks {
+        varchar deck_id PK "also the S3 folder"
+        text title
+        text template
+        text current_file
+        varchar status "building, ready, failed"
+        timestamptz created_at
+        timestamptz updated_at
+    }
+    jobs {
+        varchar job_id PK
+        varchar deck_id FK
+        varchar kind "ingest, create, edit, ..."
+        jsonb request
+        varchar status "queued, running, done, failed"
+        jsonb summary
+        text error
+        jsonb log
+        timestamptz created_at
+        timestamptz finished_at
+    }
+    checkpoints {
+        text thread_id PK
+        text checkpoint_ns PK
+        text checkpoint_id PK
+        text parent_checkpoint_id
+        jsonb checkpoint "small state values, channel versions"
+        jsonb metadata "which node, which step"
+    }
+    checkpoint_blobs {
+        text thread_id PK
+        text checkpoint_ns PK
+        text channel PK "a state field"
+        text version PK
+        bytea blob "that field's value"
+    }
+    checkpoint_writes {
+        text thread_id PK
+        text checkpoint_ns PK
+        text checkpoint_id PK
+        text task_id PK
+        integer idx PK
+        text channel
+        bytea blob "what a node returned"
+    }
+```
+
 ## Setting it up on a new machine
 
 ### What the machine needs
@@ -156,7 +305,7 @@ the job object below - `202` while it runs, `200` when finished (or with `?wait=
 |---|---|---|
 | `GET /health` | - | `{ok, bucket, default_template, jobs_running}` |
 | `POST /templates` | file `file` (the .pptx); `make_default` (default `true`) | job; result: `{ok, template_id, kit, template, patterns, capacity, dropped, replaced}` |
-| `POST /decks` | `brief` (required); `deck_id` (made from the brief if missing, e.g. `the-support-bot-pilot-7f3a9c`); `title` (the brief if missing); context as files `context` (repeatable: .md .txt .csv .json .docx), text `context`, or `context_uris` (s3:// or server paths); `template` (s3:// URI) or file `template`; optional `outline`, `content_pack` (JSON, skip the model's writing) | job; result: the deck result below |
+| `POST /decks` | `brief` (required); `title` (the brief if missing); `deck_id` - if missing, made from the title: its first five words, lower-case, joined by underscores, plus a 6-character unique part (`Support bot pilot - ops review` -> `support_bot_pilot_ops_review_7f3a9c`); context as files `context` (repeatable: .md .txt .csv .json .docx), text `context`, or `context_uris` (s3:// or server paths); `template` (s3:// URI) or file `template`; optional `outline`, `content_pack` (JSON, skip the model's writing) | job; result: the deck result below |
 | `POST /decks/{deck_id}/edit` | `instruction` | job; deck result |
 | `POST /decks/{deck_id}/translate` | `lang`; optional `slides` (1-based list) | job; deck result |
 | `POST /decks/{deck_id}/ask` | `instruction` - the router decides what it is | job; deck result, or `{question}` |
@@ -227,12 +376,28 @@ and `server_workers` (2) run at once.
 
 ## Data model
 
-Postgres holds two kinds of tables. **LangGraph's checkpointer** tables (`checkpoints`,
-`checkpoint_blobs`, `checkpoint_writes`, `checkpoint_migrations`) store each conversation's
-state after every node, as opaque blobs keyed by `thread_id` - that is what lets a later turn
-carry on. They are LangGraph's, written by it, and not changed here. Next to them, **the
-project's own two tables** (`src/deck_agent/db/`) record what people and programs ask about:
-which decks exist, and what was done to each.
+Postgres holds six tables: four belong to LangGraph's checkpointer, two to this project.
+The diagram of all six is under [Diagrams](#3-the-tables).
+
+**LangGraph's checkpointer** stores each conversation's state, so a later turn - or another
+process, or the answer to a question the graph asked - carries on from exactly where it stopped.
+All four are keyed by `thread_id`, which is the `deck_id`. LangGraph creates and writes them
+(`make init` runs its migrations); this project never writes them directly.
+
+| Table | One row is | Written |
+|---|---|---|
+| `checkpoints` | a snapshot of the state after one step: the small values inline (`checkpoint` jsonb), which version of each large field it uses, and `metadata` (which node, which step) | after every node |
+| `checkpoint_blobs` | one large state field (`channel`: `outline`, `plan`, `deck_versions`, ...) at one version, serialised | when that field changes - unchanged fields are not copied again |
+| `checkpoint_writes` | what one node returned, before it is folded into the next checkpoint; how an interrupted run resumes (`ask`, `approve_outline`) | as each node finishes |
+| `checkpoint_migrations` | the checkpointer's own schema version | by `make init` |
+
+They grow with every step of every turn - around twenty checkpoints for a create - and
+are removed with the deck: `DELETE /decks/{id}` and `deckops clean` call the checkpointer's
+`delete_thread`. Reading a conversation's state means unpacking these blobs, which is why the
+records people query are kept in tables of their own.
+
+**The project's own two tables** (`src/deck_agent/db/`) record what people and programs ask
+about: which decks exist, and what was done to each.
 
 **decks** - one row per presentation
 
