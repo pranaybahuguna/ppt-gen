@@ -146,6 +146,37 @@ Long operations (ingesting, creating) run as **jobs**: the request returns `202`
 to hold the request until it finishes. Every finished result has a **`summary`** - what
 changed, one line each - and a **`download_url`** for the `.pptx`, served by this server.
 
+### Every REST endpoint
+
+Bodies are JSON or a multipart form (`-F`); files must be multipart. "Job" means the response is
+the job object below - `202` while it runs, `200` when finished (or with `?wait=true`).
+
+| Method and path | Body | Returns |
+|---|---|---|
+| `GET /health` | - | `{ok, bucket, default_template, jobs_running}` |
+| `POST /templates` | file `file` (the .pptx); `make_default` (default `true`) | job; result: `{ok, template_id, kit, template, patterns, capacity, dropped, replaced}` |
+| `POST /decks` | `deck_id`, `brief` (both required); context as files `context` (repeatable: .md .txt .csv .json .docx), text `context`, or `context_uris` (s3:// or server paths); `template` (s3:// URI) or file `template`; optional `outline`, `content_pack` (JSON, skip the model's writing) | job; result: the deck result below |
+| `POST /decks/{deck_id}/edit` | `instruction` | job; deck result |
+| `POST /decks/{deck_id}/translate` | `lang`; optional `slides` (1-based list) | job; deck result |
+| `POST /decks/{deck_id}/ask` | `instruction` - the router decides what it is | job; deck result, or `{question}` |
+| `POST /decks/{deck_id}/answer` | `text` - answers the question the last run asked | job; deck result |
+| `POST /decks/{deck_id}/attach` | file `file` (a .pptx from elsewhere); optional `instruction` | job; deck result |
+| `POST /decks/{deck_id}/undo` | - | `{ok, deck, dropped, versions}` |
+| `GET /decks` | - | `{decks: {deck_id: {objects, size, session, last_written}}, objects, size}` |
+| `GET /decks/{deck_id}` | - | `{exists, versions, version_urls, download_url, template, kit, turn, trace, pending_question}` |
+| `GET /decks/{deck_id}/download` | `?version=N` (default: latest) | the `.pptx` file |
+| `DELETE /decks/{deck_id}` | - | what was deleted: `{deleted_objects, freed, deleted_sessions}` |
+| `GET /jobs/{job_id}` | - | the job object |
+| `GET /jobs` | - | every job this server has run, newest first, without logs and results |
+
+The job object: `{job_id, kind, deck_id, status: queued|running|done|failed, seconds, log, result,
+error, status_url}`. The deck result: `{ok, deck, versions, summary, download_url, changelog,
+warnings, errors, previews, route, manifest}`; when the run stopped to ask, `{ok: false,
+question}`; when it declined, `{ok: false, reason, errors}`.
+
+Errors are `{error}` with `400` (bad input), `404` (no such deck, version, job or action), `409`
+(that deck already has a job running) or `500`.
+
 ```bash
 # ingest a template (multipart upload); it becomes the default
 curl -X POST localhost:8765/templates -F file=@"Your Template.pptx"
