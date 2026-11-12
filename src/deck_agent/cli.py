@@ -3,7 +3,8 @@
     deckops doctor                       is everything this needs actually working?
     deckops init                         create the checkpoint tables and the bucket
     deckops seed                         put the sample template and content in the bucket
-    deckops kit <template.pptx>          ingest a template: kit cached in kits/, template in uploads/
+    deckops kit <template.pptx>          ingest a template: kit cached in kits/, template in
+    uploads/
     deckops create <id> "<brief>" ...    a new deck
     deckops edit <id> "<instruction>"    change the deck this session has
     deckops translate <id> <lang>        translate it
@@ -33,11 +34,18 @@ from .settings import REPO, settings
 
 
 def _p(obj) -> None:
+    """Print an object as indented JSON - the one output format every command uses.
+
+    Called by: every cmd_* function.
+    """
     print(json.dumps(obj, indent=1, ensure_ascii=False, default=str))
 
 
 def _upload_if_local(path_or_uri: str | None) -> str | None:
-    """A local .pptx becomes an object first: nothing in the graph works on local paths."""
+    """A local .pptx becomes an object first: nothing in the graph works on local paths.
+
+    Called by: cmd_attach, cmd_create, cmd_seed.
+    """
     if not path_or_uri or path_or_uri.startswith("s3://"):
         return path_or_uri
     local = Path(path_or_uri)
@@ -51,6 +59,11 @@ def _upload_if_local(path_or_uri: str | None) -> str | None:
 # --------------------------------------------------------------------------- commands
 
 def cmd_doctor(args) -> int:
+    """`deckops doctor`: check the engine, fonts, sandbox image, object storage, checkpointer and
+    model; print each with the fix for any problem, then READY or a count of problems.
+
+    Called by: main(); `make doctor`. Exit code 1 when anything is wrong.
+    """
     s = settings()
     out: dict = {"settings": s.redacted(), "engine": None, "fonts": None,
                  "sandbox": None, "checkpointer": None, "object_storage": None}
@@ -107,6 +120,10 @@ def cmd_doctor(args) -> int:
 
 
 def cmd_init(args) -> int:
+    """`deckops init`: create the checkpoint tables in Postgres and the bucket in S3. Idempotent.
+
+    Called by: main(); `make init`, once after `make up`.
+    """
     from .infra.checkpointer import migrate
 
     print(migrate())
@@ -117,7 +134,10 @@ def cmd_init(args) -> int:
 
 
 def cmd_seed(args) -> int:
-    """Put the engine's own sample template and a small content pack in the bucket."""
+    """Put the engine's own sample template and a small content pack in the bucket.
+
+    Called by: main.
+    """
     samples = REPO / "local" / "samples"
     template = samples / "example_style.pptx"
     if not template.exists():
@@ -145,6 +165,14 @@ def cmd_seed(args) -> int:
 
 
 def cmd_kit(args) -> int:
+    """`deckops kit <template.pptx>`: ingest a template.
+
+    Prepares the file, builds and tests a kit (engine.kitbuild.build_kit), stores the kit in
+    `kits/` and the prepared template in `uploads/`, and with --make-default writes it into
+    config/agent.json. With single_kit on, other kits and their templates are removed.
+
+    Called by: main(). Exit code 1 when the template yields no usable layouts.
+    """
     from .engine.kitbuild import build_kit
     from .nodes.kit import kit_key
     from .infra.storage import sha256_file
@@ -218,6 +246,12 @@ def cmd_kit(args) -> int:
 
 
 def cmd_create(args) -> int:
+    """`deckops create <id> <brief>`: a new deck. Uploads --template and --context files first,
+    then
+    calls facade.create_deck and prints the result.
+
+    Called by: main().
+    """
     content = json.loads(Path(args.content).read_text()) if args.content else None
     outline = json.loads(Path(args.outline).read_text()) if args.outline else None
     extra = {"outline": outline} if outline else {}
@@ -229,12 +263,20 @@ def cmd_create(args) -> int:
 
 
 def cmd_edit(args) -> int:
+    """`deckops edit <id> <instruction>`. Calls facade.edit_deck on the session's current deck.
+
+    Called by: main(), when that subcommand is given. Returns the process exit code.
+    """
     result = facade.edit_deck(args.id, args.instruction)
     _p(result)
     return 0 if result.get("ok") else 1
 
 
 def cmd_translate(args) -> int:
+    """`deckops translate <id> <lang>`. Calls facade.translate_deck, optionally for --slides only.
+
+    Called by: main(), when that subcommand is given. Returns the process exit code.
+    """
     slides = [int(x) for x in args.slides.split(",")] if args.slides else None
     result = facade.translate_deck(args.id, args.lang, slides)
     _p(result)
@@ -242,19 +284,30 @@ def cmd_translate(args) -> int:
 
 
 def cmd_ask(args) -> int:
+    """`deckops ask <id> <instruction>`. Calls facade.ask_deck: the router decides what is wanted.
+
+    Called by: main(), when that subcommand is given. Returns the process exit code.
+    """
     result = facade.ask_deck(args.id, args.instruction)
     _p(result)
     return 0 if result.get("ok") else 1
 
 
 def cmd_answer(args) -> int:
+    """`deckops answer <id> <text>`. Calls facade.answer to resume a run that stopped to ask.
+
+    Called by: main(), when that subcommand is given. Returns the process exit code.
+    """
     result = facade.answer(args.id, args.text)
     _p(result)
     return 0 if result.get("ok") else 1
 
 
 def cmd_attach(args) -> int:
-    """Hand an existing deck to a session, then do something with it."""
+    """Hand an existing deck to a session, then do something with it.
+
+    Called by: main.
+    """
     uri = _upload_if_local(args.deck)
     result = facade.ask_deck(args.id, args.instruction or "what can you do with this deck?",
                              attachments=[uri], source_deck=uri)
@@ -263,23 +316,38 @@ def cmd_attach(args) -> int:
 
 
 def cmd_session(args) -> int:
+    """`deckops session <id>`. Prints facade.session: versions, template, kit, trace.
+
+    Called by: main(), when that subcommand is given. Returns the process exit code.
+    """
     _p(facade.session(args.id))
     return 0
 
 
 def cmd_undo(args) -> int:
+    """`deckops undo <id>`. Calls facade.undo: drops the newest version.
+
+    Called by: main(), when that subcommand is given. Returns the process exit code.
+    """
     _p(facade.undo(args.id))
     return 0
 
 
 def cmd_get(args) -> int:
+    """`deckops get <s3://...> <path>`. Downloads one object from the bucket.
+
+    Called by: main(), when that subcommand is given. Returns the process exit code.
+    """
     path = store().get(args.uri, args.path)
     print(path)
     return 0
 
 
 def cmd_ls(args) -> int:
-    """The bucket, without needing the AWS CLI or its credentials set up."""
+    """The bucket, without needing the AWS CLI or its credentials set up.
+
+    Called by: main.
+    """
     from .infra.cleanup import human
 
     objs = store().objects(args.prefix or "")
@@ -303,7 +371,10 @@ def cmd_ls(args) -> int:
 
 
 def cmd_clean(args) -> int:
-    """Plan a clean-up, show it, and only carry it out with --yes."""
+    """Plan a clean-up, show it, and only carry it out with --yes.
+
+    Called by: main.
+    """
     from .infra import cleanup
     from .infra.checkpointer import checkpointer
 
@@ -346,6 +417,10 @@ def cmd_clean(args) -> int:
 
 
 def cmd_graph(args) -> int:
+    """`deckops graph`. Prints the graph as mermaid (graph.mermaid).
+
+    Called by: main(), when that subcommand is given. Returns the process exit code.
+    """
     from .graph import mermaid
 
     print(mermaid())
@@ -353,7 +428,10 @@ def cmd_graph(args) -> int:
 
 
 def cmd_selftest(args) -> int:
-    """Run the sandbox's own checks and print them: network, root filesystem, tools, fonts."""
+    """Run the sandbox's own checks and print them: network, root filesystem, tools, fonts.
+
+    Called by: main.
+    """
     import tempfile
 
     from .sandbox.docker import read_result, run_container
@@ -371,6 +449,11 @@ def cmd_selftest(args) -> int:
 # --------------------------------------------------------------------------- parser
 
 def main(argv: list[str] | None = None) -> int:
+    """Parse the command line and run one subcommand.
+
+    Called by: the `deckops` console script (pyproject.toml), `python -m deck_agent.cli`, and the
+    Makefile targets. Returns the subcommand's exit code.
+    """
     ap = argparse.ArgumentParser(prog="deckops", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)

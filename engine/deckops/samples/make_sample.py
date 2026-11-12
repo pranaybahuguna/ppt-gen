@@ -54,6 +54,11 @@ SAMPLE_TEXT = {
 
 
 def build():
+    """Build the 7-slide sample deck the tests and the demo use, with XML re-serialised to look as
+    though PowerPoint wrote it.
+
+    Called by: main(); `make samples`; the test fixtures, when the sample is missing.
+    """
     prs = Presentation()
     L = prs.slide_layouts
     s = prs.slides.add_slide(L[0])

@@ -55,7 +55,11 @@ FOOTER = "Sample footer text"
 # --------------------------------------------------------------------------- 1-2
 
 def draft(template: str | Path) -> tuple[dict, dict, dict]:
-    """Rules only: a candidate pattern for every slide that can be reused. -> (kit, index, notes)"""
+    """Rules only: a candidate pattern for every slide that can be reused. -> (kit, index, notes)
+
+
+    Called by: build_kit, light_kit; tests/validate_real_model.py.
+    """
     raw = draft_kit(str(template), Path(template).name, dedupe=False)
     notes = {"draft_notes": raw.get("notes"), "slides_total": raw.get("slides_total")}
     kit = {k: v for k, v in raw.items() if k not in ("notes", "slides_total")}
@@ -75,6 +79,8 @@ def marked_pictures(template: str | Path, kit: dict, index: dict, outdir: Path,
 
     `render` is the renderer to use - `deck_agent.sandbox.render.render`, injected so that this
     module never starts a process itself. Returns {slide number: PNG bytes of the marked copy}.
+
+    Called by: build_kit; tests/validate_real_model.py.
     """
     slides = sorted(p["slide"] - 1 for p in kit["patterns"].values())
     result = render(template, outdir, slides)
@@ -97,7 +103,11 @@ def marked_pictures(template: str | Path, kit: dict, index: dict, outdir: Path,
 
 def label_and_merge(kit: dict, index: dict, planner, marked: dict[int, bytes],
                     total: int, log=print) -> tuple[dict, dict, dict]:
-    """Rules + (optional) vision -> one pattern per slide kind. -> (patterns, decisions, answers)"""
+    """Rules + (optional) vision -> one pattern per slide kind. -> (patterns, decisions, answers)
+
+
+    Called by: build_kit, light_kit.
+    """
     merged: dict[str, dict] = {}
     decisions: dict[str, dict] = {}
     answers: dict[str, dict] = {}
@@ -136,6 +146,8 @@ def accept(template: str | Path, index: dict, kit: dict, workdir: Path,
       1. does the pattern hold content as long as its example's?   -> test text at that length
       2. does each label make sense for its box?                   -> `role_problems`, which is
          physical: a field meant for prose must sit in a box that holds at least two lines.
+
+    Called by: build_kit.
     """
     report: dict = {}
     plan_slides: list[dict] = []
@@ -197,7 +209,10 @@ def accept(template: str | Path, index: dict, kit: dict, workdir: Path,
 
 
 def _vision_compare(result, owner, report, planner, example_pngs, workdir, log) -> str:
-    """Optional last check: does a test slide still *look* like its example? Needs a renderer."""
+    """Optional last check: does a test slide still *look* like its example? Needs a renderer.
+
+    Called by: accept.
+    """
     if not (getattr(planner, "vision", False) and getattr(planner, "can_compare", True) and example_pngs):
         return "not run (no vision model configured)"
     from ..sandbox.render import render as render_fn
@@ -234,6 +249,8 @@ def capacity(template: str | Path, index: dict, kit: dict, workdir: Path,
     The example shows k items; that number is an accident of whoever drew the slide. So build a
     test slide with k+1, k+2 ... cap items, with text 15% longer than the example's, and take
     the largest count that still passes the checks.
+
+    Called by: build_kit.
     """
     kit = copy.deepcopy(kit)
     trial = copy.deepcopy(kit)
@@ -294,7 +311,10 @@ def capacity(template: str | Path, index: dict, kit: dict, workdir: Path,
 
 def build_kit(template: str | Path, workdir: Path, planner=None, render=None,
               log=print) -> tuple[dict, dict]:
-    """Template in, tested kit out. -> (kit, report). No person in the loop."""
+    """Template in, tested kit out. -> (kit, report). No person in the loop.
+
+    Called by: cli.cmd_kit, nodes.kit.ensure_kit.
+    """
     template = Path(template)
     workdir.mkdir(parents=True, exist_ok=True)
     kit, index, notes = draft(template)
@@ -351,6 +371,8 @@ def badge_problems(pattern: dict, shapes: dict) -> list[str]:
 
     In the spirit of the engine's own convention - prefer a rule that *drops* a doubtful
     pattern over one that guesses - a pattern with such a field is dropped, not repaired.
+
+    Called by: light_kit.
     """
     out = []
     named = list(pattern["fields"].items())
@@ -391,6 +413,8 @@ def light_kit(deck: str | Path, planner=None, log=print) -> tuple[dict, dict]:
 
     Item counts still stay at whatever the example slide shows, which is the conservative
     direction, and the finished slide is still checked like any other.
+
+    Called by: nodes.edit._change_layouts, nodes.edit._insert_slides.
     """
     kit, index, notes = draft(deck)
     merged, decisions, _ = label_and_merge(kit, index, planner, {}, len(index["slides"]), log)

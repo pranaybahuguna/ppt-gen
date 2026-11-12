@@ -32,6 +32,16 @@ from .common import make_previews, publish_version, workspace
 
 
 def edit_plan(state: DeckState, planner=None, log=print) -> dict:
+    """Turn an edit request into typed actions (one model call) from a stripped-down view of the
+    deck.
+
+    Graph node. Runs: on the edit route, after route.
+    Reads: instruction, slide_scope, the current deck (deck_versions[-1]) or source_deck.
+    Writes: edit_actions, work_base (the version the edit applies to); route='decline' when the
+        model returns no actions. Publishes edit_plan.json.
+    Next: graph.after_edit_plan -> edit_apply | ask | decline.
+    Called by: LangGraph, registered in graph.build_graph.
+    """
     base = current_deck(state) or state.get("source_deck")
     if not base:
         return {"route": "decline", "route_reason": "there is no deck here to edit.",
@@ -59,6 +69,18 @@ def edit_plan(state: DeckState, planner=None, log=print) -> dict:
 
 
 def edit_apply(state: DeckState, planner=None, log=print) -> dict:
+    """Apply the edit actions: text ops, styles, theme colours, inserted slides, layout changes;
+    check and publish.
+
+    Graph node. Runs: on the edit route, after edit_plan.
+    Reads: edit_actions, work_base, route, and for layout changes deck_plan, kit, template,
+        code_slides, plan_divergence.
+    Writes: deck_versions (+1), previews, findings, structural, leaked, changelog, errors,
+        plan_divergence, deck_plan (after a layout change); route='decline' when nothing could
+        be applied.
+    Next: look, then graph.after_look -> after_edit.
+    Called by: LangGraph, registered in graph.build_graph.
+    """
     with workspace(state) as ws:
         base = ws.fetch(state["work_base"], "source.pptx")
         index = probe(base)
@@ -191,11 +213,18 @@ def edit_apply(state: DeckState, planner=None, log=print) -> dict:
 
 
 def _relaid_slides(visual: dict) -> set[int]:
+    """Indices of the slides a layout change touches.
+
+    Called by: edit_apply, to check and preview exactly those slides.
+    """
     return {r["slide"] - 1 for r in visual.get("relayouts") or [] if r.get("slide")}
 
 
 def _styled_slides(visual: dict, index: dict) -> set[int]:
-    """Which slides a visual change could have altered. A theme change touches all of them."""
+    """Which slides a visual change could have altered. A theme change touches all of them.
+
+    Called by: edit_apply.
+    """
     if visual.get("theme"):
         return set(range(len(index["slides"])))
     by_ref = {s["ref"]: i for i, s in enumerate(index["slides"])}
@@ -213,7 +242,10 @@ def _styled_slides(visual: dict, index: dict) -> set[int]:
 
 
 def _touched_slides(ops: list[dict], index: dict) -> set[int]:
-    """Which slides an op batch affects, so the checks look only there."""
+    """Which slides an op batch affects, so the checks look only there.
+
+    Called by: edit_apply.
+    """
     by_ref = {s["ref"]: i for i, s in enumerate(index["slides"])}
     out: set[int] = set()
     for op in ops:
@@ -232,6 +264,8 @@ def _insert_slides(ws, deck, inserts: list[dict], planner, log):
     The kit here is the *light* one (draft and label, no acceptance test, no capacity
     measurement): a single inserted slide does not justify building test decks, and the result
     is checked by the same rules as any other slide anyway.
+
+    Called by: edit_apply.
     """
     bootstrap()
     from controlplane import slide_flow
@@ -324,18 +358,30 @@ def _insert_slides(ws, deck, inserts: list[dict], planner, log):
 
 
 def after_edit(state: DeckState) -> str:
+    """Decision after an edit has been looked at: deliver, or ask/decline if a node said so.
+
+    Called by: graph.after_look on the edit route.
+    """
     if state.get("route") in ("ask", "decline"):
         return state["route"]
     return "deliver"
 
 
 def _flat(text) -> str:
+    """Text compared as words only (list joined, spacing collapsed, lower case).
+
+    Called by: _insert_slides and _slide_number_with.
+    """
     if isinstance(text, list):
         text = " ".join(text)
     return " ".join(str(text or "").split()).strip().lower()
 
 
 def _slide_number_with(index: dict, flat_title: str) -> int:
+    """The 1-based number of the slide containing this text, or 0.
+
+    Called by: _insert_slides, to refuse inserting a slide that is already there.
+    """
     for i, slide in enumerate(index["slides"], start=1):
         if any(_flat(x) == flat_title for x in _slide_texts(slide)):
             return i
@@ -353,6 +399,8 @@ def _look_at_one(path, position: int, planner, log) -> list[str]:
     Only high-severity problems come back, and only when `vision_review` is on. A reviewer that
     cannot be reached returns nothing, because a slide that was built correctly must not be
     rejected because a model endpoint was down.
+
+    Called by: nodes.custom_code.custom_code, _change_layouts, _insert_slides.
     """
     if not settings().vision_review or not getattr(planner, "review_slide", None):
         return []
@@ -374,7 +422,10 @@ def _look_at_one(path, position: int, planner, log) -> list[str]:
 
 
 def _slide_texts(slide: dict) -> list[str]:
-    """Every line of text on a slide, longest first - used to find it in the plan."""
+    """Every line of text on a slide, longest first - used to find it in the plan.
+
+    Called by: _change_layouts, _insert_slides, _slide_number_with.
+    """
     out = []
     for shape in slide["shapes"]:
         text = " ".join(p["text"] for p in shape.get("paras", [])).strip()
@@ -407,6 +458,8 @@ def _change_layouts(ws, deck, relayouts: list[dict], state, planner, log):
     was. A slide that looked repetitive is better than one that is broken.
 
     -> (deck, what changed, problems, the updated plan or None)
+
+    Called by: edit_apply.
     """
     from ..engine import bootstrap
     from ..engine.build import compile_plan, repair_feedback
@@ -579,6 +632,8 @@ def _can_rebuild(state) -> tuple[bool, str]:
     Rebuilding gives back the template's *whole* kit - the proper cover, the closing slide, the
     measured capacities - instead of only the layouts this deck happens to contain. The price
     is that anything not written down in the plan is not rebuilt, so this asks first.
+
+    Called by: _change_layouts.
     """
     if not (state.get("deck_plan") and state.get("kit") and state.get("template")):
         return False, ("I did not build this deck from a template in this session, so I have no "
@@ -592,7 +647,10 @@ def _can_rebuild(state) -> tuple[bool, str]:
 
 def _template_still_there(state) -> tuple[bool, str]:
     """A rebuild needs the template and its kit, and with `single_kit` ingesting another
-    template removes both. Kept apart from `_can_rebuild`, which only reads the state."""
+    template removes both. Kept apart from `_can_rebuild`, which only reads the state.
+
+    Called by: _change_layouts.
+    """
     from ..infra.storage import store
 
     if store().exists(state["kit"]) and store().exists(state["template"]):
@@ -607,6 +665,8 @@ def _replay_code_slides(ws, deck, code_slides, planner, log):
     The code and the context it ran with were both kept for exactly this. Replaying beats
     re-generating: the slide a person already accepted is the slide they get back, and no model
     call is spent. If a replay fails the slide is simply missing, which is said out loud.
+
+    Called by: nodes.create.assemble, _rebuild_with_layouts.
     """
     from ..engine.deck import new_slide_index, reseal
     from ..infra.storage import store
@@ -659,6 +719,8 @@ def _rebuild_with_layouts(ws, relayouts: list[dict], state, planner, log):
     are untouched; only which layout holds them changes.
 
     -> (deck, what changed, problems, the updated plan)
+
+    Called by: _change_layouts.
     """
     from ..engine import bootstrap
     from ..engine.build import baseline_for_kit, build_from_kit
@@ -733,6 +795,8 @@ def _plan_position(plan: dict, state, slide_number: int) -> int | None:
 
     Slides drawn by generated code sit in the deck but not in the plan, so every one of them
     before this slide shifts it by one.
+
+    Called by: _rebuild_with_layouts.
     """
     before = sum(1 for c in (state.get("code_slides") or [])
                  if (c.get("slide") or 0) <= slide_number)

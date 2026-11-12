@@ -24,6 +24,10 @@ from .common import make_previews, publish_version, warnings_of, workspace
 
 
 def _scope(state: DeckState, index: dict) -> set[int] | None:
+    """The 0-based slides a translation is limited to (slide_scope), or None for all.
+
+    Called by: translate_plan, translate_apply.
+    """
     numbers = state.get("slide_scope")
     if not numbers:
         return None
@@ -31,6 +35,16 @@ def _scope(state: DeckState, index: dict) -> set[int] | None:
 
 
 def translate_plan(state: DeckState, planner=None, log=print) -> dict:
+    """Plan a translation: tag the deck's text runs and have the model translate them, keeping
+    formatting.
+
+    Graph node. Runs: on the translate route, after route.
+    Reads: target_lang, slide_scope, the current deck or source_deck.
+    Writes: plan (the translated runs), work_base, extra_ops, slide_scope; route='ask' with
+        pending_question when no language was given.
+    Next: graph.after_translate_plan -> translate_apply | ask | decline.
+    Called by: LangGraph, registered in graph.build_graph.
+    """
     base = current_deck(state) or state.get("source_deck")
     if not base:
         return {"route": "decline", "route_reason": "there is no deck here to translate.",
@@ -57,6 +71,16 @@ def translate_plan(state: DeckState, planner=None, log=print) -> dict:
 
 
 def translate_apply(state: DeckState, log=print) -> dict:
+    """Apply the translation as engine ops, check the result, publish a version.
+
+    Graph node. Runs: on the translate route, after translate_plan, and again after each
+        translate_repair.
+    Reads: plan, work_base, extra_ops, target_lang, repair_round.
+    Writes: deck_versions (+1), findings, structural, leaked, previews, changelog,
+        plan_divergence.
+    Next: look, then graph.after_look -> after_translate.
+    Called by: LangGraph, registered in graph.build_graph.
+    """
     bootstrap()
     from deckops.compiler import compile_translate
 
@@ -89,7 +113,16 @@ def translate_apply(state: DeckState, log=print) -> dict:
 
 
 def translate_repair(state: DeckState, planner=None, log=print) -> dict:
-    """Round 1: ask for shorter phrasing. Round 2: shrink the font. Then stop and say so.
+    """Shorten translated text that overflows, or fall back to a smaller font.
+
+    Graph node. Runs: on the translate route, when after_translate finds overflow and rounds are
+        left.
+    Reads: findings, plan, work_base, target_lang, repair_round.
+    Writes: plan, extra_ops, repair_round.
+    Next: translate_apply.
+    Called by: LangGraph, registered in graph.build_graph.
+
+    Round 1: ask for shorter phrasing. Round 2: shrink the font. Then stop and say so.
 
     The order matters. Shorter wording is what a translator would do; a smaller font is what a
     tool does when it has run out of ideas. Doing the second first hides the problem.
@@ -130,6 +163,11 @@ def translate_repair(state: DeckState, planner=None, log=print) -> dict:
 
 
 def after_translate(state: DeckState) -> str:
+    """Decision after a translation has been looked at: repair overflow while rounds are left,
+    otherwise deliver.
+
+    Called by: graph.after_look on the translate route.
+    """
     if state.get("route") in ("ask", "decline"):
         return state["route"]
     if not warnings_of(state):

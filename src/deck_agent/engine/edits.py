@@ -30,6 +30,8 @@ def deck_view(index: dict, slide_scope: set[int] | None = None) -> list[dict]:
 
     Slides that carry a numbered card grid are flagged, because that is the one structural
     edit the engine can do today and the model needs to know where it is available.
+
+    Called by: nodes.edit.edit_plan; tests/validate_real_model.py.
     """
     bootstrap()
     from deckops.compiler import detect_cards
@@ -62,6 +64,8 @@ def compile_edit(actions: list[dict], index: dict) -> tuple[list[dict], list[dic
     ops go to the executor, inserted slides need a second pass that copies and moves a slide,
     and visual changes have no op at all (see `engine/style.py`) so they are a deterministic
     pass of their own.
+
+    Called by: nodes.edit.edit_apply; tests/validate_real_model.py.
     """
     bootstrap()
     from deckops.compiler import CompileError, compile_card_grid
@@ -185,6 +189,10 @@ def compile_edit(actions: list[dict], index: dict) -> tuple[list[dict], list[dic
 
 
 def _escape(text: str) -> str:
+    """Escape text for the engine's tagged-run text format (<, >, &).
+
+    Called by: compile_edit, for every set_text action.
+    """
     import html
 
     return html.escape(text, quote=False)
@@ -206,6 +214,8 @@ def content_from_plan_slide(plan_slide: dict, kind: str | None = None) -> dict:
     the layout chooser understands them. A field the new layout has no room for is simply not
     offered by `options_for`, which is how "change the layout" stays honest - it can only move
     the slide to a layout that genuinely holds what is already there.
+
+    Called by: nodes.edit._change_layouts, nodes.edit._rebuild_with_layouts.
     """
     fields = plan_slide.get("fields", {}) or {}
     content: dict = {"kind": kind or _guess_kind(plan_slide)}
@@ -245,7 +255,10 @@ def content_from_plan_slide(plan_slide: dict, kind: str | None = None) -> dict:
 
 
 def _guess_kind(plan_slide: dict) -> str:
-    """A hint for sorting the options, taken from what the slide actually holds."""
+    """A hint for sorting the options, taken from what the slide actually holds.
+
+    Called by: content_from_plan_slide.
+    """
     if plan_slide.get("table"):
         return "table"
     if plan_slide.get("charts"):
@@ -266,6 +279,8 @@ def match_plan_slide(plan: dict, title: str) -> tuple[int, dict] | tuple[None, N
     Position cannot be used: a slide drawn by generated code, or one inserted later, shifts
     everything after it. The title is what a person would match on, and it is what is matched
     on here.
+
+    Called by: nodes.edit._change_layouts.
     """
     wanted = _flatten(title)
     if not wanted:
@@ -277,6 +292,10 @@ def match_plan_slide(plan: dict, title: str) -> tuple[int, dict] | tuple[None, N
 
 
 def _flatten(text) -> str:
+    """Text compared as words only: a list joined, spacing collapsed, lower case.
+
+    Called by: match_plan_slide.
+    """
     if isinstance(text, list):
         text = " ".join(text)
     return " ".join(str(text or "").split()).strip().lower()

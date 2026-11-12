@@ -43,6 +43,7 @@ DEFAULT_ALLOWED = {"pptx", "math", "copy", "json", "re", "textwrap", "itertools"
 
 
 class Timeout(Exception):
+    """The model's code ran past its time limit."""
     pass
 
 
@@ -51,6 +52,11 @@ def _limits(cpu_seconds: int) -> None:
     # rlimit fired first the process would be killed outright, result.json would never be
     # written, and the caller would see an unexplained exit code instead of a sentence it can
     # hand back to the model. The rlimit is the backstop, not the mechanism.
+    """CPU, file size, open files and process limits for this process - a backstop behind the
+    container's own limits.
+
+    Called by: main, before the model's code is loaded.
+    """
     resource.setrlimit(resource.RLIMIT_CPU, (cpu_seconds + 5, cpu_seconds + 5))
     resource.setrlimit(resource.RLIMIT_FSIZE, (64 * 1024 * 1024,) * 2)
     resource.setrlimit(resource.RLIMIT_NOFILE, (128, 128))
@@ -58,9 +64,13 @@ def _limits(cpu_seconds: int) -> None:
 
 
 def _guarded_import(allowed: set):
+    """An __import__ that allows only the allowlisted modules, so a module name built at run time
+    cannot get past the static check.
+    """
     real = __import__
 
     def guarded(name, globals=None, locals=None, fromlist=(), level=0):
+        """The replacement __import__."""
         root = name.split(".")[0]
         if level or root not in allowed:
             raise ImportError(
@@ -72,6 +82,11 @@ def _guarded_import(allowed: set):
 
 
 def _safe_builtins(allowed: set) -> dict:
+    """The builtins the model's code gets: without eval, exec, open and the like, and with the
+    guarded __import__.
+
+    Called by: run.
+    """
     import builtins
 
     out = {k: v for k, v in vars(builtins).items() if k not in BANNED_BUILTINS}
@@ -80,6 +95,11 @@ def _safe_builtins(allowed: set) -> dict:
 
 
 def run(indir: str, outdir: str, seconds: int) -> dict:
+    """Load the model's code with the trimmed builtins, call build(prs, ctx) on the deck under a
+    time limit, and save the result. -> the result dict written to result.json.
+
+    Called by: main.
+    """
     from pptx import Presentation
     from pptx.util import Emu
 
@@ -124,6 +144,10 @@ def run(indir: str, outdir: str, seconds: int) -> dict:
 
 
 def main(argv: list[str]) -> int:
+    """Entry point inside the sandbox container: `python3 /opt/runner/code_harness.py in out <s>`.
+
+    Called by: the agent's sandbox.code.run_builder, which starts the container.
+    """
     indir, outdir, seconds = argv[0], argv[1], int(argv[2])
     os.makedirs(outdir, exist_ok=True)
     try:

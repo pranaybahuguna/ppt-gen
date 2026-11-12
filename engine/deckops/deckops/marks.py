@@ -14,6 +14,7 @@ from .validate import FALLBACK_FONTS
 
 
 def _font(size):
+    """A font for the labels drawn on a slide picture, falling back to Pillow's default."""
     for f in FALLBACK_FONTS:
         if os.path.exists(f):
             return ImageFont.truetype(f, size)
@@ -21,6 +22,12 @@ def _font(size):
 
 
 def mark(png_in: str, png_out: str, slide: dict, slide_size: dict, ids: list[int], item_ids: list[int]):
+    """Draw numbered boxes over a rendered slide picture, one per shape the kit wants labelled, so
+    a
+    vision model can say what each box is.
+
+    Called by: the agent's engine.kitbuild.marked_pictures, when a template is ingested.
+    """
     im = Image.open(png_in).convert("RGB")
     W, H = im.size
     sx, sy = W / slide_size["w"], H / slide_size["h"]

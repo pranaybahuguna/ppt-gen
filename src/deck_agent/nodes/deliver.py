@@ -23,6 +23,16 @@ from .common import warnings_of, workspace
 
 
 def deliver(state: DeckState, log=print) -> dict:
+    """Finish the turn: write manifest.json, make a download link, and return the result.
+
+    Graph node. Runs: last on every successful route.
+    Reads: deck_versions, previews, changelog, errors, findings and notes (as warnings), trace,
+        route details, kit and template, code_slides, run and thread ids.
+    Writes: delivered = {ok, deck, url, previews, warnings, changelog, route, versions,
+        manifest}.
+    Next: END.
+    Called by: LangGraph, registered in graph.build_graph.
+    """
     s = settings()
     st = store()
     deck = current_deck(state)

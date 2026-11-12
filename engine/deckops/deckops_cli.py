@@ -5,9 +5,12 @@
     python3 deckops_cli.py kit my_template.pptx my_kit.json --llm llm.json   # rules + vision model
 
     # 2. create a new deck in that template's look (two stages: content, then a layout per slide)
-    python3 deckops_cli.py create my_kit.json content.json "brief for the deck" new_deck.pptx --llm llm.json
-    python3 deckops_cli.py create my_kit.json content.json "brief" new.pptx --outline outline.json  # no model
-    python3 deckops_cli.py create my_kit.json content.json "brief" new_deck.pptx --plan plan.json   # no model
+    python3 deckops_cli.py create my_kit.json content.json "brief for the deck" new_deck.pptx --llm
+    llm.json
+    python3 deckops_cli.py create my_kit.json content.json "brief" new.pptx --outline outline.json
+    # no model
+    python3 deckops_cli.py create my_kit.json content.json "brief" new_deck.pptx --plan plan.json
+    # no model
 
     # 3. translate slides of an existing deck
     python3 deckops_cli.py translate deck.pptx fr 1,2,5 deck_fr.pptx --llm llm.json
@@ -29,12 +32,18 @@ from controlplane.planner import OpenAICompatPlanner, RecordedVision, StubPlanne
 
 
 def planner(args):
+    """The planner for a standalone run: recorded labels, a model from --llm, or the offline stub.
+    """
     if getattr(args, "labels", None):
         return RecordedVision(args.labels)
     return OpenAICompatPlanner.from_file(args.llm) if args.llm else StubPlanner()
 
 
 def cmd_kit(args):
+    """Standalone `kit`: build and test a kit for a template with the engine's orchestrator.
+
+    Not used by the agent; the agent's equivalent is `deckops kit` (deck_agent.cli.cmd_kit).
+    """
     run, kit, report = orchestrator.prepare_template(args.runs, args.template, planner(args))
     # the kit points at its template relative to where the kit is saved
     kit["template"] = os.path.relpath(os.path.abspath(args.template), os.path.dirname(os.path.abspath(args.kit_out)))
@@ -49,6 +58,7 @@ def cmd_kit(args):
 
 
 def cmd_create(args):
+    """Standalone `create` from a kit. Not used by the agent; see `deckops create`."""
     content = json.load(open(args.content))
     plan = json.load(open(args.plan)) if args.plan else None
     outline = json.load(open(args.outline)) if args.outline else None
@@ -63,6 +73,7 @@ def cmd_create(args):
 
 
 def cmd_translate(args):
+    """Standalone `translate`. Not used by the agent; see `deckops translate`."""
     slides = [int(x) for x in args.slides.split(",")]
     run, man = orchestrator.translate(args.runs, args.deck, args.lang, slides, planner(args))
     shutil.copy(run.p("out.pptx"), args.out)
@@ -70,6 +81,10 @@ def cmd_translate(args):
 
 
 def main():
+    """The engine's standalone command line (python deckops_cli.py ...). Not used by the agent; the
+    project's
+    command is `deckops` (deck_agent.cli).
+    """
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--runs", default=os.path.join(ROOT, "runs"), help="where run folders go")
     sub = ap.add_subparsers(dest="cmd", required=True)

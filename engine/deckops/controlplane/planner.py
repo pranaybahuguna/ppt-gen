@@ -3,7 +3,8 @@
 Two implementations behind one interface:
 - StubPlanner: offline and deterministic, so the POC runs here with no model access.
 - OpenAICompatPlanner: talks to any OpenAI-compatible /v1/chat/completions endpoint
-  (vLLM, an internal gateway, a hosted API). Configured explicitly - never from environment variables.
+  (vLLM, an internal gateway, a hosted API). Configured explicitly - never from environment
+  variables.
 """
 from __future__ import annotations
 
@@ -62,6 +63,9 @@ If "feedback" is given, your previous answer was rejected: fix exactly what it s
 
 
 class StubPlanner:
+    """The offline planner: no model, deterministic answers, so the whole pipeline can be tested.
+    The agent's StubAgentPlanner extends it.
+    """
     name = "stub (offline, deterministic)"
 
     FR = {
@@ -102,6 +106,8 @@ class StubPlanner:
     }
 
     def translate(self, paragraphs: list[dict], lang: str) -> dict:
+        """Offline translation from a small fixed phrasebook; unknown text is returned unchanged.
+        """
         out = []
         for p in paragraphs:
             if p["text"].strip() == "":
@@ -110,13 +116,16 @@ class StubPlanner:
         return {"mode": "translate", "target_lang": lang, "paragraphs": out}
 
     def shorten(self, paragraphs: list[dict], lang: str, pct: int) -> dict:
+        """Offline shortening from a small fixed list."""
         out = [{"ref": p["ref"], "tagged": self.FR_SHORT[p["text"]]} for p in paragraphs if p["text"] in self.FR_SHORT]
         return {"paragraphs": out}
 
     def plan_from_kit(self, brief: str, kit_description: str, content: dict) -> dict:
+        """Not available offline: there is no model to write content."""
         raise NotImplementedError("the offline stub has no model: pass a ready-made plan instead")
 
     def outline(self, brief, content, max_points):
+        """Not available offline: there is no model to write content. Pass an outline instead."""
         raise NotImplementedError("the offline stub can't write content: pass --outline outline.json")
 
     # Offline stage 2: a plain rule-based renderer. Picks the first layout offered (they arrive sorted
@@ -128,6 +137,11 @@ class StubPlanner:
                      "note": "note", "heading": "heading"}
 
     def render_slide(self, slide, options, context, feedback=None, previous=None):
+        """Offline stage 2: take the first layout offered and fill its fields from the content by
+        name; with feedback, fix the item count the feedback names.
+
+        Called by: slide_flow.render_one, in the agent's tests and demo.
+        """
         if previous is not None and feedback:
             return self._fix(previous, feedback)
         o = options[0]
@@ -159,6 +173,7 @@ class StubPlanner:
 
     @staticmethod
     def _fix(previous, feedback):
+        """Adjust a previous answer to the item count named in feedback."""
         import re
         fixed = json.loads(json.dumps(previous))
         for msg in feedback:
@@ -175,6 +190,7 @@ class StubPlanner:
             if m:
                 old, limit = m.group(1), int(m.group(2))
                 def shorten(v):                   # offline: keep whole words up to the limit
+                    """Cut a value to whole words within the limit the feedback names."""
                     if isinstance(v, str) and v.startswith(old[:40]) and len(v) > limit:
                         out = ""
                         for w in v.split():
@@ -188,6 +204,9 @@ class StubPlanner:
         return fixed
 
     def plan_create(self, brief: str) -> dict:
+        """A fixed layout-family plan, for the engine's standalone create path. Not used by the
+        agent.
+        """
         return {"mode": "create", "slides": [
             {"message": "Title", "layout_family": "title", "blocks": [
                 {"role": "title", "content": {"kind": "text", "text": "Passive mandates: fee compression"}},
@@ -210,7 +229,16 @@ class StubPlanner:
 
 
 class OpenAICompatPlanner:
+    """The model client for any OpenAI-compatible /v1/chat/completions endpoint: JSON mode,
+    retries without temperature for models that reject it, pictures for the vision calls.
+    The agent's AgentPlanner extends it with routing, edit planning, code and review calls.
+    """
     def __init__(self, base_url: str, model: str, api_key: str = ""):
+        """A client for an OpenAI-compatible /v1/chat/completions endpoint.
+
+        Called by: the agent's AgentPlanner, which inherits it (llm.planner.planner builds it from
+        llm.json).
+        """
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self.model = model
@@ -218,6 +246,9 @@ class OpenAICompatPlanner:
         self.send_temperature = True
 
     def _chat(self, system, user) -> dict:
+        """One JSON-mode chat call: a system prompt and one user message. -> the parsed JSON
+        answer.
+        """
         return self._post([{"role": "system", "content": system}, {"role": "user", "content": user}])
 
     def _post(self, messages) -> dict:
@@ -246,27 +277,51 @@ class OpenAICompatPlanner:
             return json.loads(text.strip().removeprefix("```json").removeprefix("```").removesuffix("```"))
 
     def translate(self, paragraphs, lang):
+        """Translate tagged paragraphs (TRANSLATE_SYSTEM), keeping each run's tag so formatting
+        survives.
+
+        Called by: the agent's nodes.translate.translate_plan.
+        """
         items = [{"ref": p["ref"], "tagged": p["tagged"]} for p in paragraphs if p["text"].strip()]
         res = self._chat(TRANSLATE_SYSTEM, json.dumps({"target_language": lang, "paragraphs": items}, ensure_ascii=False))
         return {"mode": "translate", "target_lang": lang, "paragraphs": res["paragraphs"]}
 
     def shorten(self, paragraphs, lang, pct):
+        """Shorten paragraphs that overflow by about pct percent, in the same language.
+
+        Called by: the agent's nodes.translate.translate_repair.
+        """
         items = [{"ref": p["ref"], "tagged": p["tagged"]} for p in paragraphs]
         return self._chat(SHORTEN_SYSTEM.format(pct=pct, lang=lang), json.dumps({"paragraphs": items}, ensure_ascii=False))
 
     def plan_create(self, brief):
+        """A layout-family plan for the engine's standalone create path. Not used by the agent."""
         return {"mode": "create", **self._chat(CREATE_SYSTEM, brief)}
 
     def plan_from_kit(self, brief, kit_description, content):
+        """A whole plan in one call, for the engine's standalone kit path. Not used by the agent,
+        which plans in
+        two stages (outline, then render_slide per slide).
+        """
         user = json.dumps({"request": brief, "content_pack": content}, ensure_ascii=False)
         return self._chat(KIT_SYSTEM.replace("{patterns}", kit_description), user)
 
     # ---- two-stage generation (controlplane/slide_flow.py) --------------------------------
     def outline(self, brief, content, max_points):
+        """Stage 1: what each slide says, from the request and the facts only (OUTLINE_SYSTEM).
+
+        Called by: the agent's nodes.create.outline.
+        """
         user = json.dumps({"request": brief, "content_pack": content}, ensure_ascii=False)
         return self._chat(OUTLINE_SYSTEM.replace("{max_points}", str(max_points)), user)
 
     def render_slide(self, slide, options, context, feedback=None, previous=None):
+        """Stage 2: place one slide's content into one of the layouts offered (RENDER_SYSTEM); with
+        feedback, fix the previous answer.
+
+        Called by: slide_flow.render_one - from the agent's render_slides, repair, layout changes
+        and inserted slides.
+        """
         msg = {"deck": context, "slide_content": slide, "layouts": options}
         if feedback:
             msg["previous_answer"], msg["feedback"] = previous, feedback
@@ -278,6 +333,7 @@ class OpenAICompatPlanner:
     vision = True
 
     def _chat_images(self, system, text, images: list[bytes]) -> dict:
+        """A chat call with pictures attached (base64 PNG), for the vision steps."""
         import base64
         parts = [{"type": "text", "text": text}] + [
             {"type": "image_url", "image_url": {"url": "data:image/png;base64," + base64.b64encode(b).decode()}}
@@ -285,7 +341,9 @@ class OpenAICompatPlanner:
         return self._post([{"role": "system", "content": system}, {"role": "user", "content": parts}])
 
     def label_slide(self, marked_png: bytes, boxes: list[dict], rules_kind: str, slide=None) -> dict:
-        """The picture shows each box outlined with its id. -> {"kind", "use_for", "offer", "boxes": {id: role}}"""
+        """The picture shows each box outlined with its id. -> {"kind", "use_for", "offer",
+        "boxes": {id: role}}
+        """
         from .kit_merge import KINDS, ROLES
         return self._chat_images(
             "You look at one slide from a corporate template. Every box a program can fill is outlined and numbered "
@@ -316,14 +374,17 @@ class OpenAICompatPlanner:
 class RecordedVision(StubPlanner):
     """Replays slide labels saved earlier (a vision model's answers, or ones written for a test).
 
-    File: {"<slide number>": {"kind": ..., "use_for": ..., "offer": ..., "boxes": {"<id>": "<role>"}}}
+    File: {"<slide number>": {"kind": ..., "use_for": ..., "offer": ..., "boxes": {"<id>":
+    "<role>"}}}
     It labels slides only; it doesn't judge test slides (compare_slides), so that check is skipped.
     """
     vision = True
     can_compare = False
 
     def __init__(self, path_or_dict):
+        """Box labels recorded from an earlier vision run, replayed instead of calling a model."""
         self.labels = path_or_dict if isinstance(path_or_dict, dict) else json.load(open(path_or_dict))
 
     def label_slide(self, marked_png, boxes, rules_kind, slide=None):
+        """The recorded labels for one slide."""
         return self.labels.get(str(slide), {})

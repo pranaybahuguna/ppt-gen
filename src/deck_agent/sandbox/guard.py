@@ -47,6 +47,7 @@ MAX_NODES = 4_000
 
 @dataclass
 class Verdict:
+    """The static check's answer: ok, and the problems phrased for the model."""
     ok: bool
     problems: list[str]
 
@@ -56,6 +57,12 @@ class Verdict:
 
 
 def inspect(code: str) -> Verdict:
+    """Read model-written code before it runs: size, syntax, imports against the allowlist, banned
+    names (eval, exec, open, ...), dunder access, and a build(prs, ctx) function.
+    -> Verdict(ok, problems phrased for the model). Not the security boundary - the container is.
+
+    Called by: sandbox.code.run_builder, before any container is started.
+    """
     problems: list[str] = []
     if len(code) > MAX_CHARS:
         return Verdict(False, [f"the code is {len(code)} characters; keep it under {MAX_CHARS}"])

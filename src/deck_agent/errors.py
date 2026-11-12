@@ -13,6 +13,9 @@ class DeckAgentError(Exception):
     kind = "error"
 
     def __init__(self, message: str, detail: dict | list | None = None):
+        """A message for people, and `detail`: the structured specifics (a list of problems, a file
+        name) for logs, manifests and model feedback.
+        """
         super().__init__(message)
         self.detail = detail
 

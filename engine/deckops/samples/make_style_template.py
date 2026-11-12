@@ -51,6 +51,7 @@ BLANK = prs.slide_layouts[6]
 
 
 def rect(s, x, y, w, h, fill, shape=MSO_SHAPE.RECTANGLE):
+    """Add a filled rectangle (or another autoshape) with no outline or shadow, in inches."""
     r = s.shapes.add_shape(shape, Inches(x), Inches(y), Inches(w), Inches(h))
     r.fill.solid()
     r.fill.fore_color.rgb = RGBColor.from_string(fill)
@@ -60,6 +61,7 @@ def rect(s, x, y, w, h, fill, shape=MSO_SHAPE.RECTANGLE):
 
 
 def text(s, x, y, w, h, value, size, colour, bold=False, italic=False, align=None, bullets=False, middle=False):
+    """Add a text box with the given font size, colour and alignment, margins zeroed, in inches."""
     tb = s.shapes.add_textbox(Inches(x), Inches(y), Inches(w), Inches(h))
     tf = tb.text_frame
     tf.word_wrap = True
@@ -87,7 +89,8 @@ def text(s, x, y, w, h, value, size, colour, bold=False, italic=False, align=Non
 
 
 def chart_area(s, x, y, w, h):
-    """A placeholder rectangle that marks where a chart goes. Replaced by a real chart on create."""
+    """A placeholder rectangle that marks where a chart goes. Replaced by a real chart on create.
+    """
     r = rect(s, x, y, w, h, B["light"])
     tf = r.text_frame
     tf.text = "Chart area"
@@ -98,6 +101,7 @@ def chart_area(s, x, y, w, h):
 
 
 def dark_background(s):
+    """Give a slide the template's dark background."""
     s.background.fill.solid()
     s.background.fill.fore_color.rgb = RGBColor.from_string(B["dark"])
 

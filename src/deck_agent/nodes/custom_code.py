@@ -36,6 +36,19 @@ from .edit import _look_at_one
 
 
 def custom_code(state: DeckState, planner=None, log=print) -> dict:
+    """Run model-written python-pptx code in the sandbox: rework over-budget slides into diagrams
+    in place, and draw slides no layout can hold.
+
+    Graph node. Runs: on the create route, from after_assemble once repairs are done and
+        pending_code is not empty (and with allow_custom_code on).
+    Reads: pending_code, kit, template, the current deck, code_attempt, code_feedback,
+        code_slides, vision_notes, changelog.
+    Writes: deck_versions (+1), previews, pending_code (what is still owed), code_attempt,
+        code_slides (each slide's code and context, for rebuilds), changelog, vision_notes,
+        errors. Publishes custom-slide-N.py, its ctx and custom_code_attempts.json.
+    Next: after_code -> deliver | repair.
+    Called by: LangGraph, registered in graph.build_graph.
+    """
     s = settings()
     pending = list(state.get("pending_code") or [])
     if not pending:
@@ -75,6 +88,10 @@ def custom_code(state: DeckState, planner=None, log=print) -> dict:
         # moved into place afterwards. Until those are added, a rework sits that many places
         # earlier than its final position.
         def now_at(item, missing_before: int) -> int:
+            """Where a slide to be reworked is in the deck right now: its final position, less the
+            slides
+            before it that are not in the deck yet.
+            """
             return item["position"] - missing_before
 
         not_yet = lambda p: sum(1 for q in pending if not q.get("rework")
@@ -112,6 +129,8 @@ def custom_code(state: DeckState, planner=None, log=print) -> dict:
         initial = list(state.get("code_feedback") or []) or None
 
         def draft(k):
+            """The model's first code for slide k. Run for every slide at once, in a thread pool.
+            """
             try:
                 return planner.write_slide_code(CONTRACT, pending[k]["content"], style, ctxs[k],
                                                 feedback=initial)
@@ -285,6 +304,8 @@ def shape_list(deck, index: int, body_box: dict | None) -> list[dict]:
     stay; `frame` is header or footer art outside the content area and stays; `content` is
     what the slide says now, in the layout being replaced, and is the code's to move, restyle,
     reuse or delete.
+
+    Called by: custom_code.
     """
     from pptx import Presentation
 
@@ -321,6 +342,10 @@ def shape_list(deck, index: int, body_box: dict | None) -> list[dict]:
 
 
 def _as_feedback(report: dict) -> list[str]:
+    """Check results turned into instructions the model can act on ('make the box taller ...').
+
+    Called by: custom_code, when a drawn slide fails the fit check.
+    """
     out = []
     for f in report["findings"]:
         if f["kind"] == "overflow":
@@ -334,7 +359,12 @@ def _as_feedback(report: dict) -> list[str]:
 
 
 def after_code(state: DeckState) -> str:
-    """Back to the normal decision, not straight out of the door.
+    """Decision after custom_code: deliver, or repair if template slides still have findings and
+    rounds are left.
+
+    Called by: LangGraph, as the conditional edge out of custom_code (graph.build_graph).
+
+    Back to the normal decision, not straight out of the door.
 
     The escape hatch sits between `assemble` and `deliver`, and returning "deliver"
     unconditionally meant anything still wrong with the deck skipped the repair loop entirely.

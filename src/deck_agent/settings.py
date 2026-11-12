@@ -23,6 +23,11 @@ CONFIG_FILE = REPO / "config" / "agent.json"
 
 
 def _env(name: str, default):
+    """A setting overridden by an environment variable, converted to the default's type (bool,
+    int, float or str). Returns the default when the variable is not set.
+
+    Called by: Settings.load, once per field.
+    """
     raw = os.environ.get(name)
     if raw is None or raw == "":
         return default
@@ -38,6 +43,10 @@ def _env(name: str, default):
 @dataclass
 class Settings:
     # ---- object storage: every artefact of record lives here, not on a local disk ----
+    """Every setting, with its default. Loaded once by settings(): defaults, then
+    config/agent.json, then DECKOPS_<FIELD> environment variables. Model credentials are not
+    here - they come only from llm.json (Settings.llm_config).
+    """
     s3_endpoint: str = "http://localhost:9000"
     s3_region: str = "us-east-1"
     s3_bucket: str = "deckops"
@@ -92,6 +101,11 @@ class Settings:
                                                 # what the session still needs. See infra/cleanup.py
 
     def redacted(self) -> dict:
+        """These settings with secrets masked (the S3 secret, the Postgres password) - safe to
+        print.
+
+        Called by: cmd_doctor, deliver (into the manifest), checkpointer error messages.
+        """
         out = asdict(self)
         out["s3_secret_key"] = "***"
         if "@" in self.pg_dsn:
@@ -99,16 +113,29 @@ class Settings:
         return out
 
     def _under(self, *parts) -> Path:
+        """A directory under local_root, created if missing.
+
+        Called by: workspace_root.
+        """
         p = REPO.joinpath(self.local_root, *parts)
         p.mkdir(parents=True, exist_ok=True)
         return p
 
     @property
     def workspace_root(self) -> Path:
+        """Where per-run scratch directories go (local/workspaces). Never of record; safe to
+        delete.
+
+        Called by: infra.workspace, the sandbox clients, cmd_kit, cmd_selftest.
+        """
         return self._under("workspaces")
 
     @property
     def font_path(self) -> Path:
+        """The metric-compatible fonts copied out of the sandbox image (local/fonts).
+
+        Called by: engine.use_local_fonts, so the overflow check measures with the right fonts.
+        """
         d = Path(self.font_dir)
         return d if d.is_absolute() else REPO / d
 
@@ -148,6 +175,10 @@ _cached: Settings | None = None
 
 
 def settings() -> Settings:
+    """The process-wide settings, loaded once (Settings.load) and cached.
+
+    Called by: almost everything that needs a setting. Tests swap it with reset().
+    """
     global _cached
     if _cached is None:
         _cached = Settings.load()
@@ -155,6 +186,9 @@ def settings() -> Settings:
 
 
 def reset(new: Settings | None = None) -> None:
-    """Tests only: swap the process-wide settings."""
+    """Tests only: swap the process-wide settings.
+
+    Called by: tests/demo.py, tests/validate_real_model.py.
+    """
     global _cached
     _cached = new

@@ -29,7 +29,10 @@ _in_memory = None
 
 @contextlib.contextmanager
 def checkpointer(s: Settings | None = None):
-    """Yield a checkpointer. Use as a context manager: the Postgres pool closes on exit."""
+    """Yield a checkpointer. Use as a context manager: the Postgres pool closes on exit.
+
+    Called by: cli.cmd_clean, cli.cmd_doctor, facade._tidy_if_asked, graph.deck_graph, migrate.
+    """
     global _in_memory
     s = s or settings()
     if s.checkpointer == "memory":
@@ -57,13 +60,19 @@ def checkpointer(s: Settings | None = None):
 
 
 def reset_memory() -> None:
-    """Tests only: forget the process-wide in-memory checkpointer."""
+    """Tests only: forget the process-wide in-memory checkpointer.
+
+    Called by: the test fixtures only (tests/conftest.py).
+    """
     global _in_memory
     _in_memory = None
 
 
 def migrate(s: Settings | None = None) -> str:
-    """Create the checkpoint tables. Idempotent - LangGraph tracks its own migrations."""
+    """Create the checkpoint tables. Idempotent - LangGraph tracks its own migrations.
+
+    Called by: cli.cmd_init.
+    """
     s = s or settings()
     if s.checkpointer == "memory":
         return "memory checkpointer: nothing to migrate"
@@ -73,6 +82,10 @@ def migrate(s: Settings | None = None) -> str:
 
 
 def _is_connection_error(e: Exception) -> bool:
+    """Whether a Postgres error means the database is not reachable (as opposed to a real error).
+
+    Called by: checkpointer(), to turn a psycopg traceback into 'run make up'.
+    """
     text = f"{e.__class__.__name__}: {e}".lower()
     return any(w in text for w in ("operationalerror", "could not connect", "connection refused",
                                    "timeout expired", "no such host", "could not translate"))

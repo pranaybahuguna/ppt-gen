@@ -41,7 +41,10 @@ CITATION_LINE = re.compile(
 # --------------------------------------------------------------------------- citations
 
 def strip_citations(value):
-    """Remove `[F2]`, `(F3, F5)` and `Source: F14` from any strings in a nested structure."""
+    """Remove `[F2]`, `(F3, F5)` and `Source: F14` from any strings in a nested structure.
+
+    Called by: clean_plan, without_citations.
+    """
     if isinstance(value, str):
         return CITATION_LINE.sub("", CITATION.sub("", value)).strip()
     if isinstance(value, list):
@@ -64,6 +67,8 @@ def without_citations(value):
     The code path needed this: `strip_citations` removes `[F2]` from visible text but keeps the
     plan's own `fact: "F2"` field, which is correct for the plan and wrong for a model asked to
     draw a slide - it rendered "F2" as a line of text under each heading.
+
+    Called by: nodes.custom_code.custom_code.
     """
     if isinstance(value, dict):
         return {k: without_citations(v) for k, v in value.items() if k not in CITATION_KEYS}
@@ -73,7 +78,10 @@ def without_citations(value):
 
 
 def clean_plan(plan: dict) -> tuple[dict, int]:
-    """-> (the plan with citation markers taken out of the visible text, how many were removed)"""
+    """-> (the plan with citation markers taken out of the visible text, how many were removed)
+
+    Called by: engine.build.build_from_kit.
+    """
     found = 0
     for slide in plan.get("slides", []):
         for text in _strings(slide):
@@ -82,6 +90,11 @@ def clean_plan(plan: dict) -> tuple[dict, int]:
 
 
 def _strings(value):
+    """Every string in a plan value, skipping the keys that are not slide text (fact, sources,
+    pattern).
+
+    Called by: clean_plan, to strip citation markers.
+    """
     if isinstance(value, str):
         yield value
     elif isinstance(value, dict):
@@ -96,7 +109,11 @@ def _strings(value):
 # --------------------------------------------------------------------------- orphaned decoration
 
 def _encloses(outer: dict, inner: dict, slack: int = 45720) -> bool:
-    """Is `inner` inside `outer`? Slack is half a centimetre in EMU, for rounding in the template."""
+    """Is `inner` inside `outer`? Slack is half a centimetre in EMU, for rounding in the template.
+
+
+    Called by: orphan_steps.
+    """
     a, b = outer.get("geom"), inner.get("geom")
     if not a or not b:
         return False
@@ -107,6 +124,10 @@ def _encloses(outer: dict, inner: dict, slack: int = 45720) -> bool:
 
 
 def _bbox(geoms):
+    """The box around a set of shape geometries, as (x0, y0, x1, y1).
+
+    Called by: unused_item_steps, to find an unused item's area.
+    """
     xs = [g["x"] for g in geoms]
     ys = [g["y"] for g in geoms]
     return (min(xs), min(ys),
@@ -114,6 +135,10 @@ def _bbox(geoms):
 
 
 def _inside(shape_geom, box, slack: int = 45720) -> bool:
+    """Whether a shape sits inside a box, with a little slack for rounding.
+
+    Called by: unused_item_steps.
+    """
     x0, y0, x1, y1 = box
     g = shape_geom
     return (g["x"] >= x0 - slack and g["y"] >= y0 - slack
@@ -135,6 +160,8 @@ def unused_item_steps(pattern: dict, example_slide: dict, used_items: int,
     vision review said "four checkmark markers and underline rules remain with no accompanying
     content". The rule is the same conservative shape as the one above - a shape with no text,
     claimed by nothing, lying inside the area an unused item would have occupied.
+
+    Called by: remove_orphans.
     """
     if "items" not in pattern:
         return []
@@ -167,6 +194,8 @@ def orphan_steps(pattern: dict, example_slide: dict, filled: set[int]) -> list[d
     """Extra `delete_shape` steps for decoration whose every field was left empty.
 
     `filled` is the set of shape ids the plan actually put something in.
+
+    Called by: remove_orphans.
     """
     from .deck import bootstrap  # noqa: F401  (kept local; this module is imported early)
 
@@ -197,10 +226,14 @@ COMPANION_GAP = int(0.6 * EMU_PER_IN)   # how close it must sit to the field it 
 
 
 def _all_shapes(example_slide: dict) -> dict[int, dict]:
-    """Every shape on the example slide by id, groups opened up."""
+    """Every shape on the example slide by id, groups opened up.
+
+    Called by: companion_steps, nodes.common.design_frame.
+    """
     out: dict[int, dict] = {}
 
     def walk(shapes):
+        """Add every shape, and the children of every group, to the result."""
         for sh in shapes:
             try:
                 out[int(sh["ref"].rsplit("shape:", 1)[1])] = sh
@@ -213,7 +246,10 @@ def _all_shapes(example_slide: dict) -> dict[int, dict]:
 
 
 def _gap(a: dict, b: dict) -> float:
-    """Shortest distance between two boxes; 0 when they touch or overlap."""
+    """Shortest distance between two boxes; 0 when they touch or overlap.
+
+    Called by: companion_steps.
+    """
     import math
 
     dx = max(0, a["x"] - (b["x"] + b["w"]), b["x"] - (a["x"] + a["w"]))
@@ -230,6 +266,8 @@ def companion_steps(pattern: dict, example_slide: dict, filled: set[int]) -> lis
     points showed three ticks over nothing. Here a small shape with no words is matched to the
     field it sits nearest, and goes when that field is left empty. Big shapes (panels,
     backgrounds, photos) are never touched, and nor is anything nearer a field that is filled.
+
+    Called by: remove_orphans.
     """
     shapes = _all_shapes(example_slide)
     named = {sid for name, sid in pattern["fields"].items() if name not in ("page", "footer")}
@@ -261,7 +299,11 @@ def companion_steps(pattern: dict, example_slide: dict, filled: set[int]) -> lis
 
 
 def remove_orphans(ops: list[dict], plan: dict, index: dict, kit: dict) -> tuple[list[dict], int]:
-    """Add the orphan deletions to a compiled op list. -> (ops, how many were added)"""
+    """Add the orphan deletions to a compiled op list. -> (ops, how many were added)
+
+    Called by: engine.build.build_from_kit, nodes.edit._change_layouts,
+        nodes.edit._insert_slides.
+    """
     added = 0
     slides = plan.get("slides", [])
     slide_ops = [o for o in ops if o.get("op") == "add_slide_from_pattern"]
@@ -285,7 +327,10 @@ def remove_orphans(ops: list[dict], plan: dict, index: dict, kit: dict) -> tuple
 
 
 def _claimed_ids(pattern: dict) -> set[int]:
-    """Every shape id the pattern names for something, whether or not this slide fills it."""
+    """Every shape id the pattern names for something, whether or not this slide fills it.
+
+    Called by: remove_orphans.
+    """
     out = set(pattern["fields"].values()) | set(pattern.get("keep", []))
     out |= set(pattern.get("charts", {}).values())
     if "table" in pattern:
@@ -294,7 +339,10 @@ def _claimed_ids(pattern: dict) -> set[int]:
 
 
 def _filled_ids(plan_slide: dict, pattern: dict) -> set[int]:
-    """Which of the pattern's shape ids this slide actually puts something into."""
+    """Which of the pattern's shape ids this slide actually puts something into.
+
+    Called by: remove_orphans.
+    """
     filled = {sid for name, sid in pattern["fields"].items()
               if plan_slide.get("fields", {}).get(name) not in (None, "", [])
               or name in ("page", "footer")}
@@ -333,6 +381,8 @@ def renumber_pages(src, dst, fmt: str = "{n} / {total}") -> dict:
     from scratch - which has no page box at all - is simply reported rather than guessed at.
 
     -> {"renumbered": n, "without_page_number": [slide numbers], "parts": {...}}
+
+    Called by: nodes.create.assemble, nodes.custom_code.custom_code, nodes.edit.edit_apply.
     """
     bootstrap()
     from pptx import Presentation
@@ -380,6 +430,10 @@ BARE_NUMBER = re.compile(r"^\s*\d+\s*$")
 
 
 def _is_slide_number(shape) -> bool:
+    """Whether a shape is a slide-number placeholder.
+
+    Called by: renumber_pages, add_slide_number.
+    """
     try:
         return shape.is_placeholder and int(shape.placeholder_format.type) == 13   # SLIDE_NUMBER
     except (AttributeError, ValueError):
@@ -393,6 +447,8 @@ def add_slide_number(src, position: int, dst) -> bool:
     footer or slide-number boxes, so a slide drawn by code arrives with no page number while
     every slide around it has one. The layout says where it goes and how it looks; this puts it
     there, holding the slide's position, which `renumber_pages` keeps right from then on.
+
+    Called by: nodes.custom_code.custom_code.
     """
     bootstrap()
     from pptx import Presentation

@@ -18,6 +18,16 @@ from .common import new_run_id, template_fingerprint, workspace
 
 
 def intake(state: DeckState) -> dict:
+    """Start a turn: give it a run id, and sort any attached decks into the deck to work on and the
+    template.
+
+    Graph node. Runs: first, on every turn (START -> intake).
+    Reads: attachments, run_id, source_deck, template, deck_versions.
+    Writes: run_id; source_deck and template when decks were attached (each one safety-checked
+        and probed first).
+    Next: route.
+    Called by: LangGraph, registered in graph.build_graph.
+    """
     run_id = state.get("run_id") or new_run_id()
     out: dict = {"run_id": run_id, "trace": [step("intake", attachments=len(state.get("attachments") or []))]}
     attachments = state.get("attachments") or []

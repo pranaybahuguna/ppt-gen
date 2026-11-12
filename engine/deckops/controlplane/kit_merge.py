@@ -1,7 +1,8 @@
 """Marry the rule-based draft with the vision model's reading of the same slide.
 
 Who owns what:
-  structure (which boxes exist, which repeat, how items are grouped)   -> the rules. Measured, exact.
+  structure (which boxes exist, which repeat, how items are grouped)   -> the rules. Measured,
+  exact.
   meaning   (what a box is for, what kind of slide it is, use_for)      -> the vision model.
   physics   (can this box actually hold that?)                          -> a veto on both.
 
@@ -31,15 +32,19 @@ KINDS = set(USE_FOR)
 
 
 def _shapes(slide):
+    """A probed slide's shapes keyed by shape id."""
     return {int(s["ref"].rsplit("shape:", 1)[1]): s for s in slide["shapes"]}
 
 
 def _text(shp):
+    """All the text of a probed shape, as one line."""
     return " ".join(p["text"] for p in shp.get("paras", [])).strip()
 
 
 def boxes_for_vision(pat: dict, slide: dict) -> list[dict]:
-    """What the vision model is told about each labelled box (it also sees them numbered in the picture)."""
+    """What the vision model is told about each labelled box (it also sees them numbered in the
+    picture).
+    """
     shapes = _shapes(slide)
     out = []
     for field, sid in pat["fields"].items():
@@ -74,6 +79,7 @@ def _veto(role, sid, shapes, column_texts=None):
 
 
 def _name(role, taken):
+    """A field name, numbered when the role is already taken on the slide (`body`, `body_2`)."""
     taken[role] += 1
     return role if taken[role] == 1 else f"{role}_{taken[role]}"
 
@@ -91,6 +97,10 @@ def merge(rule_name: str, pat: dict, slide: dict, vision: dict | None, n: int, t
     p = copy.deepcopy(pat)
 
     def decide(field, sid, column_texts=None):
+        """The final label for one box: where the rules and the vision model agree, that; where
+        they
+        disagree, the model's - recorded in `decisions` either way.
+        """
         base = re.sub(r"_\d+$", "", field)
         v = said.get(sid)
         if v is None or v == base:

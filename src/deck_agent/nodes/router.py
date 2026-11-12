@@ -25,6 +25,18 @@ MAX_ASKS = 2
 
 
 def route(state: DeckState, planner=None) -> dict:
+    """Decide what the request is: create, edit, translate, custom, ask or decline.
+
+    Graph node. Runs: after intake on every turn, and again after ask once the person has
+        answered.
+    Reads: instruction, slide_scope, target_lang, trace (to count questions already asked), and
+        a summary of the session (is there a deck).
+    Writes: route, route_reason, route_confidence, route_by, target_lang, slide_scope;
+        pending_question when it has to ask.
+    Next: after_route -> gather (create) | edit_plan | translate_plan | custom_code | ask |
+        decline.
+    Called by: LangGraph, registered in graph.build_graph.
+    """
     s = settings()
     instruction = state.get("instruction") or ""
     context = summarise(state)
@@ -68,7 +80,16 @@ def route(state: DeckState, planner=None) -> dict:
 
 
 def ask(state: DeckState) -> dict:
-    """Stop and ask the person one question. The graph genuinely stops here.
+    """Stop the run and ask the person one question (LangGraph interrupt).
+
+    Graph node. Runs: when route, gather, ensure_kit or another node sets route='ask'. The
+        process may exit here; facade.answer() resumes the thread at this line.
+    Reads: pending_question, instruction.
+    Writes: answer; instruction (the answer is appended to it); pending_question cleared.
+    Next: route, so the answer can change the route entirely.
+    Called by: LangGraph, registered in graph.build_graph.
+
+    Stop and ask the person one question. The graph genuinely stops here.
 
     `interrupt()` saves the state and raises; the process may exit. When the caller resumes the
     thread with an answer, execution continues from this line with `answer` set. That is only
@@ -88,7 +109,12 @@ def ask(state: DeckState) -> dict:
 
 
 def after_route(state: DeckState) -> str:
-    """Where the request goes. One place, named, so the trace reads as a decision."""
+    """Decision after route: map the chosen route to the first node of that route.
+
+    Called by: LangGraph, as the conditional edge out of route (graph.build_graph).
+
+    Where the request goes. One place, named, so the trace reads as a decision.
+    """
     chosen = state.get("route")
     if chosen == "ask":
         return "ask"
@@ -104,7 +130,17 @@ def after_route(state: DeckState) -> str:
 
 
 def decline(state: DeckState) -> dict:
-    """Say plainly that we will not do this, and why. Never silently do something else."""
+    """Say plainly that the request will not be done, and why - never quietly do something else.
+
+    Graph node. Runs: when any decision returns 'decline' (unsupported route, nothing
+        applicable, too many questions).
+    Reads: route, route_reason.
+    Writes: delivered = {ok: false, reason, supported}.
+    Next: END.
+    Called by: LangGraph, registered in graph.build_graph.
+
+    Say plainly that we will not do this, and why. Never silently do something else.
+    """
     chosen = state.get("route")
     why = {
         "restyle": "moving a deck onto a different template is not supported yet. What I can do "

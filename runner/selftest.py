@@ -19,6 +19,11 @@ import sys
 
 
 def main(argv: list[str]) -> int:
+    """Check, from inside the container, that it has no network, a read-only root filesystem, and
+    the tools and fonts rendering needs. Writes report.json.
+
+    Called by: `deckops selftest` / `make selftest`.
+    """
     outdir = argv[0] if argv else "out"
     os.makedirs(outdir, exist_ok=True)
     res: dict = {}

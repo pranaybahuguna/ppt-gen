@@ -86,6 +86,9 @@ PLAN = {
 
 
 def main(kit_path, dst):
+    """Build a deck from the sample template's hand-written kit with a fixed plan, through the
+    standalone orchestrator. Its CONTENT and PLAN are also used by the engine's tests.
+    """
     run, man = orchestrator.create_from_kit(os.path.join(ROOT, "out", "workspaces"), kit_path,
                                             "pilot update deck", CONTENT, StubPlanner(), plan=PLAN)
     shutil.copy(run.p("out.pptx"), dst)

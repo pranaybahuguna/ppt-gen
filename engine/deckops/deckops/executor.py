@@ -37,7 +37,9 @@ PHASE = {SetParagraphText: 0, SetRunText: 0, SetFontSize: 1, SetGeometry: 1, Del
 
 
 class ExecError(Exception):
+    """A batch of operations refused because some did not bind; `errors` lists (index, problem)."""
     def __init__(self, errors):
+        """One error for the whole batch, listing each failing operation by its index."""
         super().__init__("; ".join(f"op[{i}] {e}" for i, e in errors))
         self.errors = errors
 
@@ -45,6 +47,11 @@ class ExecError(Exception):
 # ---- bind ---------------------------------------------------------------------
 
 def _bind(prs, op):
+    """Resolve one operation's target in the deck and check its fingerprint, before anything is
+    written. -> what _apply needs. Raises RefError when the target is gone or its text changed.
+
+    Called by: execute, for every operation first - so a batch is refused whole, never half-done.
+    """
     if isinstance(op, (SetParagraphText, SetRunText)):
         ref = Ref.parse(op.target)
         kind, el, _ = resolve(prs, ref)
@@ -97,6 +104,7 @@ def _bind(prs, op):
 
 
 def _check_tags(p, value):
+    """Check that a tagged value only names runs and fields the paragraph really has."""
     tokens = parse_tagged(value)
     n_runs = len(para_runs(p))
     n_flds = sum(1 for c in p if c.tag == qn("a:fld"))
@@ -108,6 +116,7 @@ def _check_tags(p, value):
 
 
 def _sldId_el(prs, slide_id):
+    """The slide-list entry for a slide id, for reordering and deleting slides."""
     for el in prs.slides._sldIdLst:
         if int(el.get("id")) == slide_id:
             return el
@@ -115,6 +124,7 @@ def _sldId_el(prs, slide_id):
 
 
 def _layout(prs, layout_id):
+    """The slide layout for an id `M<master>L<layout>` (as probe's layout catalog names them)."""
     try:
         mi, li = layout_id[1:].split("L")
         return prs.slide_masters[int(mi)].slide_layouts[int(li)]
@@ -143,12 +153,17 @@ _SHAREABLE = {RT.OLE_OBJECT, RT.PACKAGE}
 
 
 def _sid(target: str) -> int:
+    """The shape id in a step target `shape:<id>`."""
     if not target.startswith("shape:"):
         raise RefError(f"step target must be 'shape:<id>', got {target!r}")
     return int(target.split(":")[1])
 
 
 def _check_cloneable(slide):
+    """Refuse to copy a slide holding a chart or SmartArt: a copy would share, not duplicate, it.
+
+    Called by: _apply, for add_slide_from_pattern.
+    """
     for rel in slide.part.rels.values():
         if rel.reltype in _NO_CLONE:
             raise RefError(f"slide {slide.slide_id} holds a chart/SmartArt/embedded object; "
@@ -156,7 +171,9 @@ def _check_cloneable(slide):
 
 
 def clone_slide(prs, src):
-    """Append a copy of `src`: same layout, shapes, background and image links. Notes are not copied."""
+    """Append a copy of `src`: same layout, shapes, background and image links. Notes are not
+    copied.
+    """
     new = prs.slides.add_slide(src.slide_layout)
     tree = new.shapes._spTree
     for el in list(tree)[2:]:                      # drop placeholders the layout created
@@ -183,12 +200,15 @@ def clone_slide(prs, src):
 
 
 def _xfrm(el):
+    """A shape's position element (a table's is in a different place)."""
     x = el.find(qn("p:xfrm"))                       # graphicFrame (tables)
     return x if x is not None else el.find(".//" + qn("a:xfrm"))
 
 
 def _fill_paragraphs(txBody, texts):
-    """Replace paragraphs; paragraph k copies the formatting of example paragraph k (or the last one)."""
+    """Replace paragraphs; paragraph k copies the formatting of example paragraph k (or the last
+    one).
+    """
     old = txBody.findall(qn("a:p"))
     for p in old:
         txBody.remove(p)
@@ -231,6 +251,11 @@ def _write_geometry(el, spec):
 
 
 def _apply_step(slide, st):
+    """Apply one step of add_slide_from_pattern to the new slide: set text, duplicate or delete a
+    shape, move or resize one (converting into a group's own space), fill a table or a chart.
+
+    Called by: _apply.
+    """
     tree = slide.shapes._spTree
     if isinstance(st, DuplicateShape):
         src = find_shape_el(slide, _sid(st.source))
@@ -282,6 +307,10 @@ def _apply_step(slide, st):
 
 
 def _draw_chart(slide, area_el, st):
+    """Draw a native chart from a dataset into a chart area, styled from the kit.
+
+    Called by: _apply_step, for a fill_chart step.
+    """
     from pptx.chart.data import CategoryChartData
     from pptx.dml.color import RGBColor
     from pptx.enum.chart import XL_CHART_TYPE, XL_LABEL_POSITION, XL_LEGEND_POSITION
@@ -358,6 +387,7 @@ def _draw_chart(slide, area_el, st):
 # ---- apply --------------------------------------------------------------------
 
 def _new_run(text):
+    """A new text run element holding `text`."""
     r = OxmlElement("a:r")
     t = OxmlElement("a:t")
     t.text = text
@@ -366,6 +396,12 @@ def _new_run(text):
 
 
 def _apply_paragraph(p, value, warnings, target):
+    """Write a paragraph's new text. Plain text goes into the first run, keeping its formatting;
+    tagged text (`<r0>...</r0><r2>...</r2>`) puts each piece into the run whose formatting it
+    should keep - which is how a translation can reorder words and keep the bold one bold.
+
+    Called by: _apply, for set_paragraph_text.
+    """
     tokens = parse_tagged(value)
     runs = para_runs(p)
     flds = [c for c in p if c.tag == qn("a:fld")]
@@ -399,6 +435,10 @@ def _apply_paragraph(p, value, warnings, target):
 
 
 def _apply(prs, op, b, warnings):
+    """Apply one bound operation to the deck.
+
+    Called by: execute, after every operation has bound.
+    """
     if isinstance(op, SetParagraphText):
         _apply_paragraph(b["el"], op.value, warnings, op.target)
     elif isinstance(op, SetRunText):
@@ -456,6 +496,7 @@ _PARSER = etree.XMLParser(remove_blank_text=True, resolve_entities=False, no_net
 
 
 def _canon(data: bytes):
+    """An XML part in canonical form (C14N), or None if it is not XML."""
     try:
         return etree.tostring(etree.fromstring(data, _PARSER), method="c14n")
     except etree.XMLSyntaxError:
@@ -488,6 +529,11 @@ def _ct_meaning(data, part_names):
 
 
 def _equivalent(name, old, new, part_names):
+    """Whether a part python-pptx re-serialised still means exactly what it meant: same canonical
+    XML, or for [Content_Types].xml the same types for the parts that exist.
+
+    Called by: save_preserving, to decide which parts keep their original bytes.
+    """
     if old == new:
         return True
     try:
@@ -503,6 +549,15 @@ def _equivalent(name, old, new, part_names):
 
 
 def save_preserving(prs, src: str, dst: str) -> dict:
+    """Save a deck so that every part that did not change keeps its original bytes.
+
+    python-pptx rewrites every part it opened; this saves, then compares part by part with the
+    source and copies back the original bytes of every part that means the same. -> which parts
+    were preserved, changed, added and removed.
+
+    Called by: execute, and the agent's own byte-preserving passes (styles, renumbering, prepare,
+    reseal).
+    """
     tmp = dst + ".tmp"
     prs.save(tmp)
     stats = {"preserved": [], "changed": [], "added": [], "removed": []}
@@ -528,6 +583,12 @@ def save_preserving(prs, src: str, dst: str) -> dict:
 # ---- entry point ----------------------------------------------------------------
 
 def execute(src: str, ops_json: list, dst: str) -> dict:
+    """Validate a list of operations, bind them all (resolving targets, checking fingerprints),
+    then apply them and save byte-preserving. Raises ExecError and changes nothing if any
+    operation fails to bind. -> {ops_applied, warnings, preserved parts, ...}
+
+    Called by: the agent's engine.deck.apply_ops - every create, edit and translate.
+    """
     ops = OpList.validate_python(ops_json)
     prs = Presentation(src)
     bound, errors = [], []

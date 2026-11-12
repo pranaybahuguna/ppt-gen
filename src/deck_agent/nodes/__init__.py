@@ -22,7 +22,7 @@ from .deliver import deliver  # noqa: F401
 from .edit import after_edit, edit_apply, edit_plan  # noqa: F401
 from .gather import after_gather, gather  # noqa: F401
 from .intake import intake  # noqa: F401
-from .kit import after_kit, ensure_kit  # noqa: F401
+from .kit import ensure_kit  # noqa: F401
 from .look import look, review_previews  # noqa: F401
 from .router import after_route, ask, decline, route  # noqa: F401
 from .translate import after_translate, translate_apply, translate_plan, translate_repair  # noqa: F401

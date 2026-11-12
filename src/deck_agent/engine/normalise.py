@@ -45,7 +45,10 @@ from . import bootstrap
 
 
 def shape_id_problems(path: str | Path) -> dict[int, list[str]]:
-    """Which slides have duplicate shape ids, and which ids. -> {slide number: [ids]}"""
+    """Which slides have duplicate shape ids, and which ids. -> {slide number: [ids]}
+
+    Called by: prepare.
+    """
     bootstrap()
     from pptx import Presentation
     from pptx.oxml.ns import qn
@@ -65,6 +68,8 @@ def unique_shape_ids(src: str | Path, dst: str | Path) -> dict:
 
     Top-level shapes keep the ids they had. Where a duplicate exists, the *nested* occurrence -
     inside an OLE object, a group's fallback, a picture - is the one renumbered.
+
+    Called by: prepare.
     """
     bootstrap()
     from pptx import Presentation
@@ -119,6 +124,8 @@ def _is_top_level(cNvPr, tree) -> bool:
 
     Top level means: `p:cNvPr` -> `p:nvSpPr`(or nvPicPr/nvGraphicFramePr/nvGrpSpPr/nvCxnSpPr)
     -> the shape -> the slide's shape tree. Anything deeper belongs to something nested.
+
+    Called by: unique_shape_ids.
     """
     holder = cNvPr.getparent()
     shape = holder.getparent() if holder is not None else None
@@ -166,6 +173,8 @@ def prepare(src: str | Path, dst: str | Path) -> dict:
     from the prepared copy only makes sense against that copy. Callers upload it and use its
     hash as the cache key - which also means a template that needed no preparation keeps its
     original hash, because the bytes come through unchanged.
+
+    Called by: cli.cmd_kit, nodes.kit.ensure_kit.
     """
     problems = shape_id_problems(src)
     if not problems:
@@ -191,6 +200,8 @@ def stable_zip(path: str | Path) -> None:
     A prepared template's content hash is its kit's cache key. Preparing the same template at
     10:01 and at 10:02 must give the same hash, or a template that needs preparing gets its
     kit built again for every deck made from it.
+
+    Called by: unique_shape_ids.
     """
     import zipfile
 

@@ -27,10 +27,24 @@ from .common import template_fingerprint, workspace
 
 
 def kit_key(template_id: str) -> str:
+    """Where a template's kit lives in the bucket: `kits/<content hash>.json`.
+
+    Called by: ensure_kit, cmd_kit.
+    """
     return f"kits/{template_id}.json"
 
 
 def ensure_kit(state: DeckState, planner=None, log=print) -> dict:
+    """Make sure the session has a tested kit for its template: reuse the cached one, or build it
+    once.
+
+    Graph node. Runs: on the create route, after gather.
+    Reads: template (or settings.default_template), template_id, kit.
+    Writes: kit, template, template_id, kit_patterns; route='ask' when there is no template;
+        route='decline' with errors when the template yields no usable layouts.
+    Next: graph.after_ensure_kit -> outline | ask | decline.
+    Called by: LangGraph, registered in graph.build_graph.
+    """
     s = settings()
     st = store()
 
@@ -101,9 +115,3 @@ def ensure_kit(state: DeckState, planner=None, log=print) -> dict:
             "trace": [step("ensure_kit", outcome="built", template_id=template_id,
                            patterns=sorted(kit["patterns"]))],
         }
-
-
-def after_kit(state: DeckState) -> str:
-    if state.get("route") in ("ask", "decline"):
-        return "ask" if state["route"] == "ask" else "decline"
-    return "outline"

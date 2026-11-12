@@ -24,7 +24,8 @@ loop with tools.
 
         START -> intake -> route -> ask --------------+
                              |                        |
-                             +-> gather -> ensure_kit -> outline -> approve_outline -> render_slides
+                             +-> gather -> ensure_kit -> outline -> approve_outline ->
+                             render_slides
                              |                                                   |
                              |                            +----------------------+
                              |                            v
@@ -53,7 +54,11 @@ from .state import DeckState
 # --------------------------------------------------------------------------- gates
 
 def _redirected(state: DeckState) -> str | None:
-    """Any node may say "I need to ask" or "I will not do this". Honour it before anything else."""
+    """Any node may say "I need to ask" or "I will not do this". Honour it before anything else.
+
+    Called by: after_edit_plan, after_ensure_kit, after_look, after_outline,
+        after_translate_plan.
+    """
     chosen = state.get("route")
     if chosen == "ask":
         return "ask"
@@ -63,18 +68,35 @@ def _redirected(state: DeckState) -> str | None:
 
 
 def after_outline(state: DeckState) -> str:
+    """Decision after outline: ask or decline if outline said so, otherwise approve_outline.
+
+    Called by: LangGraph, as the conditional edge out of outline (build_graph).
+    """
     return _redirected(state) or "approve_outline"
 
 
 def after_translate_plan(state: DeckState) -> str:
+    """Decision after translate_plan: ask or decline if translate_plan said so, otherwise
+    translate_apply.
+
+    Called by: LangGraph, as the conditional edge out of translate_plan (build_graph).
+    """
     return _redirected(state) or "translate_apply"
 
 
 def after_edit_plan(state: DeckState) -> str:
+    """Decision after edit_plan: ask or decline if edit_plan said so, otherwise edit_apply.
+
+    Called by: LangGraph, as the conditional edge out of edit_plan (build_graph).
+    """
     return _redirected(state) or "edit_apply"
 
 
 def after_ensure_kit(state: DeckState) -> str:
+    """Decision after ensure_kit: ask or decline if ensure_kit said so, otherwise outline.
+
+    Called by: LangGraph, as the conditional edge out of ensure_kit (build_graph).
+    """
     return _redirected(state) or "outline"
 
 
@@ -85,6 +107,8 @@ def after_look(state: DeckState) -> str:
     A node that already said "I will not do this" is honoured first: without that check, an
     edit that applied nothing fell through to the create route's decision and was delivered as
     though it had worked.
+
+    Called by: build_graph.
     """
     redirected = _redirected(state)
     if redirected:
@@ -100,7 +124,10 @@ def after_look(state: DeckState) -> str:
 # --------------------------------------------------------------------------- wiring
 
 def build_graph(planner=None, log=print) -> StateGraph:
-    """The graph, uncompiled. `planner` is injected so a test can drive it with no model."""
+    """The graph, uncompiled. `planner` is injected so a test can drive it with no model.
+
+    Called by: deck_graph, mermaid.
+    """
     g = StateGraph(DeckState)
 
     g.add_node("intake", nodes.intake)
@@ -173,6 +200,8 @@ def deck_graph(planner=None, log=print, s: Settings | None = None):
 
         with deck_graph(planner) as graph:
             graph.invoke(state, config={"configurable": {"thread_id": "..."}})
+
+    Called by: facade._invoke, facade.answer, facade.session, facade.undo.
     """
     s = s or settings()
     if planner is None:
@@ -184,5 +213,8 @@ def deck_graph(planner=None, log=print, s: Settings | None = None):
 
 
 def mermaid() -> str:
-    """The graph as a diagram, for the documentation and for arguing about."""
+    """The graph as a diagram, for the documentation and for arguing about.
+
+    Called by: cli.cmd_graph.
+    """
     return build_graph().compile().get_graph().draw_mermaid()

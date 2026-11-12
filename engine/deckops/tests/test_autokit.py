@@ -1,4 +1,5 @@
-"""The automatic style kit: it must label the example template the same way a hand-written kit does,
+"""The automatic style kit: it must label the example template the same way a hand-written kit
+does,
 catch a wrongly labelled kit, and never let a picture from an example slide into a new deck."""
 import io
 import json

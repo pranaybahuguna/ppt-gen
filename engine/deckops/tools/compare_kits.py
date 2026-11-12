@@ -15,6 +15,7 @@ from deckops.autokit import draft_kit  # noqa: E402
 
 
 def _items(p):
+    """A pattern's items as sets of shape ids, for comparing two kits regardless of order."""
     it = p.get("items")
     if not it:
         return None
@@ -22,6 +23,11 @@ def _items(p):
 
 
 def compare(template, ref_kit):
+    """Compare the rule-drafted kit for a template with a hand-written reference kit, pattern by
+    pattern. -> rows of agreements and differences.
+
+    Called by: the engine's tests (test_autokit) and by hand.
+    """
     auto = draft_kit(template, os.path.basename(template), dedupe=False)
     by_slide = {p["slide"]: p for p in auto["patterns"].values()}
     rows = []

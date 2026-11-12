@@ -37,7 +37,10 @@ LONG_FIELDS = ("body", "points", "text", "commentary", "side_text", "intro")
 
 
 def _long_capacity(pattern: dict) -> int:
-    """How many points a pattern can hold in its prose fields, with no repeated items."""
+    """How many points a pattern can hold in its prose fields, with no repeated items.
+
+    Called by: relaxed_options.
+    """
     return sum(1 for f in pattern["fields"]
                if f.split("_")[0] in LONG_FIELDS or f.rsplit("_", 1)[0] in LONG_FIELDS)
 
@@ -47,6 +50,9 @@ def relaxed_options(slide: dict, kit: dict, position: int, total: int) -> tuple[
 
     Returns `([], None)` when even the relaxed rules find nothing, which is the honest signal
     that this slide needs drawing rather than filling.
+
+    Called by: nodes.create.render_slides, nodes.edit._change_layouts,
+        nodes.edit._rebuild_with_layouts; tests/validate_real_model.py.
     """
     bootstrap()
     from controlplane.slide_flow import option
@@ -81,6 +87,9 @@ def relaxed_options(slide: dict, kit: dict, position: int, total: int) -> tuple[
 
 
 def _sorted(options: list[dict], slide: dict) -> list[dict]:
-    """Fewest unfilled fields first: the closest layout, by the one measure that is objective."""
+    """Fewest unfilled fields first: the closest layout, by the one measure that is objective.
+
+    Called by: relaxed_options.
+    """
     given = {k for k, v in slide.items() if v} | {"title", "subtitle"}
     return sorted(options, key=lambda o: len([f for f in o["fields"] if f not in given]))

@@ -18,6 +18,11 @@ import traceback
 
 
 def render(pptx: str, outdir: str, pages: list[int], dpi: int) -> dict:
+    """Convert a deck to PDF with LibreOffice, then the requested pages to PNG with pdftoppm.
+    Pages are numbered as slides; hidden slides are not in the PDF, so they shift the numbering.
+
+    Called by: main.
+    """
     os.makedirs(outdir, exist_ok=True)
     soffice = shutil.which("soffice") or "/usr/bin/soffice"
     # LibreOffice insists on creating a user profile before it will start, and it cannot work
@@ -42,6 +47,12 @@ def render(pptx: str, outdir: str, pages: list[int], dpi: int) -> dict:
 
 
 def main(argv: list[str]) -> int:
+    """Entry point inside the sandbox container: `python3 /opt/runner/render.py <deck> <out>
+    <pages>
+    <dpi>`, writing result.json.
+
+    Called by: the agent's sandbox.render (render_backend='docker').
+    """
     pptx, outdir, pages_csv, dpi = argv[0], argv[1], argv[2], int(argv[3])
     pages = [int(x) for x in pages_csv.split(",") if x != ""]
     os.makedirs(outdir, exist_ok=True)

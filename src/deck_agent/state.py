@@ -46,6 +46,11 @@ CLEAR = "__clear__"
 
 
 def accumulate(old: list, new):
+    """Reducer for list fields that build up over a turn (errors, plan_divergence): appends what a
+    node returns, and empties the list when a node returns CLEAR.
+
+    Called by: LangGraph, whenever a node returns one of those fields.
+    """
     if new == CLEAR:
         return []
     return (old or []) + (new or [])
@@ -59,6 +64,12 @@ SUPPORTED: set[str] = {"create", "edit", "translate", "custom"}
 
 class DeckState(TypedDict, total=False):
     # ---- identity ------------------------------------------------------------------
+    """Everything one conversation about a deck knows, checkpointed after every node.
+
+    Typed fields rather than a chat transcript: the current deck is deck_versions[-1], files are
+    s3:// references, and per-turn fields are reset by turn_reset at the start of each turn.
+    Each field's comment says what it holds; the nodes' docstrings say who reads and writes it.
+    """
     thread_id: str                  # one deck session; the LangGraph thread and the S3 prefix
     run_id: str                     # one turn through the graph
     turn: int                       # how many requests this session has handled
@@ -136,7 +147,10 @@ class DeckState(TypedDict, total=False):
 
 
 def new_state(thread_id: str, instruction: str, **kw: Any) -> DeckState:
-    """A state for a first turn. Later turns resume the thread and keep what is already there."""
+    """A state for a first turn. Later turns resume the thread and keep what is already there.
+
+    Called by: facade._invoke.
+    """
     base: DeckState = {
         "thread_id": thread_id, "instruction": instruction, "turn": 1,
         "attachments": [], "context_docs": [], "deck_versions": [], "kit_patterns": [],
@@ -158,6 +172,8 @@ def turn_reset(instruction: str, run_id: str, turn: int, **kw) -> dict:
     repair counter, and then "now translate it" quietly reuses a stale outline. What *survives*
     a turn is the deck itself: its versions, its template, its kit, its outline. Everything
     about the last piece of work is cleared here, on purpose, in one visible place.
+
+    Called by: facade._invoke.
     """
     return {
         "instruction": instruction, "run_id": run_id, "turn": turn,
@@ -174,13 +190,21 @@ def turn_reset(instruction: str, run_id: str, turn: int, **kw) -> dict:
 
 
 def current_deck(state: DeckState) -> str | None:
-    """The one answer to "which deck are we talking about"."""
+    """The one answer to "which deck are we talking about".
+
+    Called by: nodes.common.fetch_current, nodes.custom_code.custom_code, nodes.deliver.deliver,
+        nodes.edit.edit_plan, nodes.translate.translate_plan, summarise.
+    """
     versions = state.get("deck_versions") or []
     return versions[-1] if versions else None
 
 
 def summarise(state: DeckState) -> dict:
-    """The short description of the session a router sees - never the transcript."""
+    """The short description of the session a router sees - never the transcript.
+
+    Called by: facade._invoke, facade._result, facade.answer, facade.session, nodes.router.ask,
+        nodes.router.route.
+    """
     return {
         "has_current_deck": bool(current_deck(state)),
         "has_attached_deck": bool(state.get("source_deck")),
@@ -194,7 +218,12 @@ def summarise(state: DeckState) -> dict:
 
 
 def step(name: str, **fields: Any) -> dict:
-    """One entry for `trace`. Every node adds exactly one, so the trace is the path taken."""
+    """One entry for `trace`. Every node adds exactly one, so the trace is the path taken.
+
+    Called by: nodes.create.approve_outline, nodes.create.assemble, nodes.create.outline,
+        nodes.create.render_slides, nodes.create.repair, nodes.custom_code.custom_code,
+        nodes.deliver.deliver, and 12 more.
+    """
     import time
 
     return {"node": name, "at": round(time.time(), 3), **fields}

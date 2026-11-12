@@ -21,11 +21,17 @@ from ..settings import Settings, settings
 
 
 class SandboxUnavailable(Boundary):
+    """Docker or the sandbox image is not there; the message names the fix (make image, start Docker).
+    """
     kind = "sandbox_unavailable"
 
 
 @dataclass
 class ContainerResult:
+    """How one container run ended: exit code, time, timeout, killed for memory, its output.
+
+    Returned by: run_container; read by the render and code clients.
+    """
     ok: bool
     exit_code: int
     seconds: float
@@ -36,13 +42,20 @@ class ContainerResult:
     argv: list[str] = field(default_factory=list)
 
     def detail(self) -> dict:
+        """The container's outcome for logs and manifests: exit code, time, timeout, memory kill,
+        the
+        last 2000 characters of its output.
+        """
         return {"exit_code": self.exit_code, "seconds": self.seconds, "timed_out": self.timed_out,
                 "killed_for_memory": self.killed_for_memory,
                 "stderr": self.stderr[-2000:], "stdout": self.stdout[-2000:]}
 
 
 def available(s: Settings | None = None) -> tuple[bool, str]:
-    """Is the sandbox usable right now? -> (ok, reason). Used by `doctor` and by fallbacks."""
+    """Is the sandbox usable right now? -> (ok, reason). Used by `doctor` and by fallbacks.
+
+    Called by: cli.cmd_doctor, run_container.
+    """
     s = s or settings()
     if not shutil.which(s.docker_bin):
         return False, f"{s.docker_bin} is not on PATH"
@@ -76,6 +89,8 @@ def run_container(argv: list[str], workdir: str | Path, *, timeout_s: int, memor
        no-new-privileges`     no capabilities, no setuid escalation
     * `--memory`/`--pids-limit`/`--cpus`  a runaway loop or a fork bomb hits a wall, not the host
     * `--user <host uid:gid>` files written to /work come back owned by us, not by root
+
+    Called by: cli.cmd_selftest, sandbox.code.run_builder, sandbox.render._render_docker.
     """
     s = s or settings()
     ok, why = available(s)
@@ -132,7 +147,10 @@ def run_container(argv: list[str], workdir: str | Path, *, timeout_s: int, memor
 
 
 def _was_oom_killed(name: str, s: Settings) -> bool:
-    """Ask Docker, rather than reading it off the exit code."""
+    """Ask Docker, rather than reading it off the exit code.
+
+    Called by: run_container.
+    """
     try:
         p = subprocess.run([s.docker_bin, "inspect", "--format", "{{.State.OOMKilled}}", name],
                            capture_output=True, text=True, timeout=30)
@@ -142,7 +160,11 @@ def _was_oom_killed(name: str, s: Settings) -> bool:
 
 
 def read_result(workdir: str | Path, name: str = "out/result.json") -> dict:
-    """Read the JSON a sandbox job leaves behind. A missing file is a failure, not an empty dict."""
+    """Read the JSON a sandbox job leaves behind. A missing file is a failure, not an empty dict.
+
+
+    Called by: cli.cmd_selftest.
+    """
     path = Path(workdir) / name
     if not path.exists():
         raise Boundary(f"the sandbox produced no {name}")

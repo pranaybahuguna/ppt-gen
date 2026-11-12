@@ -44,6 +44,7 @@ def dummy(n_chars: int) -> str:
 
 
 def _example_text(shape: dict) -> list[str]:
+    """The example slide's non-empty paragraphs for a shape (a 12-character stand-in if none)."""
     return [p["text"] for p in shape.get("paras", []) if p["text"].strip()] or ["x" * 12]
 
 
@@ -56,6 +57,9 @@ LONG_ROLES = {"body", "points", "text", "commentary", "intro"}
 
 
 def _value(shape, full, field="", stretch=1.0):
+    """Placeholder text for a test slide: 'Sample' for the minimal variant, otherwise text as long
+    as the example's (times `stretch`).
+    """
     paras = _example_text(shape)
     if not full:
         return "Sample"
@@ -70,6 +74,11 @@ def box_lines(shape) -> float:
 
 
 def role_problems(pat: dict, shapes: dict) -> list[str]:
+    """Labels that cannot be right physically: a field meant for longer text whose box holds
+    fewer than two lines at its font size.
+
+    Called by: the agent's engine.kitbuild (accept, light_kit), before a pattern is test-built.
+    """
     out = []
     named = list(pat["fields"].items())
     if "items" in pat:
@@ -111,7 +120,9 @@ def test_slides(name: str, pat: dict, index: dict, counts=None, stretch=1.0) -> 
 
 
 def acceptance_test(root, kit_path, index, planner=None, log=print, example_pngs=None):
-    """Returns (final_kit, report). example_pngs: {pattern: png bytes} for the optional vision check."""
+    """Returns (final_kit, report). example_pngs: {pattern: png bytes} for the optional vision
+    check.
+    """
     from . import orchestrator
     kit = json.load(open(kit_path))
     report = {}

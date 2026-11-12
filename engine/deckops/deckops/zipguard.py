@@ -8,10 +8,17 @@ MAX_INPUT = 100 * 1024 * 1024
 
 
 class UnsafeArchive(Exception):
+    """A file refused before parsing: too large, not a zip, a zip bomb, or paths that escape."""
     pass
 
 
 def check(path: str):
+    """Refuse a file before anything parses it: too large, not a zip, too many entries, entries
+    that
+    decompress too far (zip bombs), or paths that escape the archive. Raises UnsafeArchive.
+
+    Called by: the agent's engine.guard_deck, on every attached deck and every code-built deck.
+    """
     import os
     if os.path.getsize(path) > MAX_INPUT:
         raise UnsafeArchive("input too large")

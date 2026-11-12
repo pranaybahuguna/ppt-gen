@@ -20,16 +20,23 @@ MAX_REPAIR = 2
 
 
 class Run:
+    """A run folder for one standalone engine operation. Not used by the agent."""
     def __init__(self, root, planner, log=print):
+        """A run folder for one standalone engine operation, with its own trace.
+
+        Not used by the agent: the agent's graph keeps its runs in object storage.
+        """
         self.id = time.strftime("%Y%m%d-%H%M%S-") + uuid.uuid4().hex[:6]
         self.ws = os.path.abspath(os.path.join(root, self.id))
         os.makedirs(self.ws)
         self.planner, self.log, self.trace = planner, log, []
 
     def p(self, name):
+        """A path inside the run folder."""
         return os.path.join(self.ws, name)
 
     def save(self, name, obj):
+        """Write a JSON file into the run folder."""
         json.dump(obj, open(self.p(name), "w"), indent=1, ensure_ascii=False)
 
     def box(self, *args):
@@ -44,6 +51,7 @@ class Run:
 
 
 def _changelog(index, ops):
+    """What a batch of text operations changed, slide by slide, in words."""
     paras = {p["ref"]: (s["index"], p["text"]) for s in index["slides"] for p in iter_paragraphs({"slides": [s]})}
     out = []
     for op in ops:
@@ -59,6 +67,13 @@ def _changelog(index, ops):
 
 
 def translate(root, src_path, lang, slide_numbers, planner, log=print):
+    """The engine's standalone translate pipeline: probe, ask the planner, compile, apply in the
+    sandboxed process, validate, retry.
+
+    Called by: deckops_cli.py and run_demo.py. Not used by the agent, whose translate route runs
+    the same
+    steps as graph nodes (nodes.translate).
+    """
     run = Run(root, planner, log)
     log(f"run {run.id}  translate -> {lang}, slides {slide_numbers}")
     shutil.copy(src_path, run.p("source.pptx"))                                  # 0 intake
@@ -121,6 +136,10 @@ def translate(root, src_path, lang, slide_numbers, planner, log=print):
 
 
 def create(root, template_path, brief, planner, log=print, family_map=None):
+    """The engine's standalone create pipeline from layout families (compile_create).
+
+    Called by: deckops_cli.py and run_demo.py. Not used by the agent.
+    """
     run = Run(root, planner, log)
     log(f"run {run.id}  create from template")
     shutil.copy(template_path, run.p("source.pptx"))
@@ -213,6 +232,8 @@ def create_from_kit(root, kit_path, brief, content, planner, log=print, plan=Non
     base_overlaps = {(f["slide_index"], tuple(f["shapes"])) for f in base["findings"] if f["kind"] == "overlap"}
 
     def build(plan, tag):
+        """Compile, apply and check one version of the plan; returns the run's result and manifest.
+        """
         run.save("plan.json", plan)
         ops = compile_from_kit(plan, index, kit, content)                        # 3 work orders (pure)
         log(f"  compile{tag}: {len(plan['slides'])} slides -> {len(ops)} ops "
@@ -224,9 +245,11 @@ def create_from_kit(root, kit_path, brief, content, planner, log=print, plan=Non
         _, val = run.box("validate", "out.pptx", "all", "render0", "validate.json")      # 5 check
 
         def example_slide(f):
+            """The template slide a finding's slide was copied from."""
             return kit["patterns"][plan["slides"][f["slide_index"]]["pattern"]]["slide"] - 1
 
         def keep(f):
+            """Whether a finding is new compared with the template's own example slide."""
             if f["kind"] == "overlap":       # new overlap = not already present on the example slide
                 return (example_slide(f), tuple(f["shapes"])) not in base_overlaps
             return f["ratio"] > 1.03 * max(1.0, base_ratio.get((example_slide(f), f["ref"].rsplit("shape:", 1)[1]), 0))

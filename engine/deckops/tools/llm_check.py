@@ -20,6 +20,9 @@ from controlplane.planner import OpenAICompatPlanner  # noqa: E402
 
 
 def main(template, llm_path, content_path=None, out_dir=None):
+    """Run every model call the standalone engine makes against a real endpoint and write a
+    summary. Not used by the agent; the project's equivalent is tests/validate_real_model.py.
+    """
     out_dir = out_dir or os.path.join(ROOT, "runs", "llm_check_" + time.strftime("%Y%m%d-%H%M%S"))
     os.makedirs(out_dir, exist_ok=True)
     planner = OpenAICompatPlanner.from_file(llm_path)

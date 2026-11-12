@@ -96,6 +96,11 @@ def compile_chart(spec: dict, datasets: dict, style: dict, where: str) -> tuple[
 
 
 def load_kit(path: str) -> dict:
+    """Read a kit file and check every pattern names its example slide and fields.
+
+    Called by: the engine's standalone paths (orchestrator, deckops_cli) and its tests; the agent
+    reads kits from object storage instead.
+    """
     kit = json.load(open(path))
     for name, p in kit["patterns"].items():
         if "slide" not in p or "fields" not in p:
@@ -115,6 +120,8 @@ def validate_kit(kit: dict, index: dict) -> list[str]:
         shapes = _shapes_by_id(index["slides"][p["slide"] - 1])
         seen = []
         def need(sid, what, text=False):
+            """Record an error if shape `sid` is missing from the example slide (or cannot hold text).
+            """
             seen.append(sid)
             if sid not in shapes:
                 errs.append(f"{where}: {what}: slide {p['slide']} has no shape {sid}")
@@ -173,29 +180,35 @@ def describe_kit(kit: dict) -> str:
 # ---- helpers over the DeckIndex ----------------------------------------------------------
 
 def _shapes_by_id(slide: dict) -> dict[int, dict]:
+    """A probed slide's shapes keyed by shape id."""
     return {int(s["ref"].rsplit("shape:", 1)[1]): s for s in slide["shapes"]}
 
 
 def _text_of(shape: dict) -> str:
+    """All the text of a probed shape, table cells included."""
     t = "".join(p["text"] for p in shape.get("paras", []))
     t += "".join(p["text"] for c in shape.get("cells", []) for p in c["paras"])
     return t.strip()
 
 
 def _as_paragraphs(value) -> list[str]:
+    """A field value as a list of paragraphs: a list as given, a string split on newlines."""
     if isinstance(value, list):
         return [str(v) for v in value] or [""]
     return str(value).split("\n")
 
 
 def _bbox(geoms):
+    """The box around a set of geometries, as (x, y, w, h)."""
     x0 = min(g["x"] for g in geoms); y0 = min(g["y"] for g in geoms)
     x1 = max(g["x"] + g["w"] for g in geoms); y1 = max(g["y"] + g["h"] for g in geoms)
     return x0, y0, x1 - x0, y1 - y0
 
 
 def _stretch(offset, size, margin, group_size, new_group_size):
-    """Shapes that reach (nearly) to the group's far edge grow with the group; small ones keep size."""
+    """Shapes that reach (nearly) to the group's far edge grow with the group; small ones keep
+    size.
+    """
     if size > 0.3 * group_size and margin < 0.25 * group_size:
         return max(1, int(new_group_size - offset - margin))
     return size
@@ -252,6 +265,13 @@ def _spill(groups_geom, placed, tol=45720):
 # ---- the compiler ---------------------------------------------------------------------------
 
 def compile_from_kit(plan: dict, index: dict, kit: dict, content: dict | None = None) -> list[dict]:
+    """Compile a plan against a kit into operations: copy each pattern's example slide, fill its
+    fields, lay out its items (adding or removing repeats to match the count), fill charts and
+    tables, and delete what is left over. Pure - no file is touched. Raises CompileError with
+    messages written to be fed back to a model.
+
+    Called by: the agent's engine.build.compile_plan (every build, rebuild and kit test).
+    """
     kit_errors = validate_kit(kit, index)
     if kit_errors:
         raise CompileError(kit_errors)
@@ -389,6 +409,7 @@ def example_texts(index: dict, kit: dict) -> set[str]:
 
 
 def _strings(v):
+    """Every string in a nested plan value."""
     if isinstance(v, str):
         yield v.strip()
     elif isinstance(v, dict):

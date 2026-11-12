@@ -24,6 +24,10 @@ from .deck import Baseline, check, preserved_count, probe
 
 @dataclass
 class BuildResult:
+    """What building a deck from a plan produced: the file, the operations, and what the checks found.
+
+    Returned by: build_from_kit; read by assemble and the edit route's rebuild.
+    """
     out_path: Path
     ops: list[dict]
     exec: dict
@@ -36,9 +40,16 @@ class BuildResult:
 
     @property
     def clean(self) -> bool:
+        """True when the build has no findings, no structural problems and no leaked template text.
+        """
         return not (self.findings or self.structural or self.leaked)
 
     def summary(self) -> dict:
+        """A short dict for logs and the trace: slides, ops, findings, parts preserved, what was
+        tidied.
+
+        Called by: assemble, the rebuild in edit._rebuild_with_layouts.
+        """
         return {"slides": len(self.out_index["slides"]), "ops": len(self.ops),
                 "findings": len(self.findings), "structural": self.structural,
                 "leaked_example_text": self.leaked,
@@ -49,7 +60,11 @@ class BuildResult:
 # --------------------------------------------------------------------------- compile
 
 def compile_plan(plan: dict, index: dict, kit: dict, content: dict | None = None) -> list[dict]:
-    """Plan -> ops. Pure. Raises `PlanInvalid` with messages written to be fed back to a model."""
+    """Plan -> ops. Pure. Raises `PlanInvalid` with messages written to be fed back to a model.
+
+    Called by: build_from_kit, engine.kitbuild.accept, engine.kitbuild.capacity,
+        nodes.edit._change_layouts, nodes.edit._insert_slides.
+    """
     bootstrap()
     from deckops.compiler import CompileError
     from deckops.patterns import compile_from_kit
@@ -62,8 +77,12 @@ def compile_plan(plan: dict, index: dict, kit: dict, content: dict | None = None
 
 def example_slide_of(plan: dict, kit: dict):
     """A new deck's slide N was copied from some example slide of the template. Findings must be
-    compared against *that* slide, or every quirk of the template is blamed on the new deck."""
+    compared against *that* slide, or every quirk of the template is blamed on the new deck.
+
+    Called by: build_from_kit.
+    """
     def resolve(finding):
+        """Map one finding on the new deck to the template slide that slide was copied from."""
         i = finding["slide_index"]
         slides = plan["slides"]
         if 0 <= i < len(slides):
@@ -78,7 +97,11 @@ def example_slide_of(plan: dict, kit: dict):
 
 def build_from_kit(src: str | Path, index: dict, kit: dict, plan: dict, content: dict | None,
                    out_path: str | Path, baseline: Baseline | None = None) -> BuildResult:
-    """Compile the plan, apply it to the template, then check what came out."""
+    """Compile the plan, apply it to the template, then check what came out.
+
+    Called by: engine.kitbuild.accept, engine.kitbuild.capacity, nodes.create.assemble,
+        nodes.edit._rebuild_with_layouts; tests/validate_real_model.py.
+    """
     from .deck import apply_ops  # local: keeps the import graph of this module flat
     from .tidy import clean_plan, remove_orphans
 
@@ -104,7 +127,11 @@ def build_from_kit(src: str | Path, index: dict, kit: dict, plan: dict, content:
 
 
 def baseline_for_kit(src: str | Path, kit: dict) -> Baseline:
-    """The checks, run on the template's own example slides. The yardstick for a new deck."""
+    """The checks, run on the template's own example slides. The yardstick for a new deck.
+
+    Called by: engine.kitbuild.accept, engine.kitbuild.capacity, nodes.create.assemble,
+        nodes.edit._rebuild_with_layouts; tests/validate_real_model.py.
+    """
     return Baseline.of(src, {p["slide"] - 1 for p in kit["patterns"].values()})
 
 
@@ -117,6 +144,8 @@ def repair_feedback(findings: list[dict], out_index: dict) -> dict[int, list[str
     costs about 1.2x the font size; so it holds `fits` lines while the text needs `needs`.
     Scaling the current text by fits/needs (and shaving 10% for safety) gives a length that
     will actually fit, which a percentage never does.
+
+    Called by: nodes.create.repair, nodes.edit._change_layouts, nodes.edit._insert_slides.
     """
     texts = {sh["ref"]: " ".join(p["text"] for p in sh.get("paras", []))
              for sl in out_index["slides"] for sh in sl["shapes"]}
@@ -145,6 +174,9 @@ def repair_feedback(findings: list[dict], out_index: dict) -> dict[int, list[str
 
 
 def font_fallback_ops(findings: list[dict]) -> list[dict]:
-    """The deterministic last resort for overflow: shrink the text. No model involved."""
+    """The deterministic last resort for overflow: shrink the text. No model involved.
+
+    Called by: nodes.translate.translate_repair.
+    """
     return [{"op": "set_font_size", "target": f["ref"], "size_pt": f["suggest_size_pt"]}
             for f in findings if f["kind"] == "overflow" and f.get("suggest_size_pt")]

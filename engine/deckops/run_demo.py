@@ -7,11 +7,13 @@
 5. zip bomb is rejected before any parser runs
 6. create a 4-slide deck from the template
 7. edit: 8 process cards -> 6, re-laid out as a 3x2 grid
-8. create a new deck in the look of an example "house style" deck (copy example slides, swap content)
+8. create a new deck in the look of an example "house style" deck (copy example slides, swap
+content)
 
     python3 run_demo.py                          # offline stub planner
     python3 run_demo.py --llm-config llm.json    # real model; llm.json is git-ignored:
-                                                 # {"base_url": "...", "model": "...", "api_key": "..."}
+                                                 # {"base_url": "...", "model": "...", "api_key":
+                                                 "..."}
 """
 import json
 import os
@@ -31,10 +33,15 @@ WS = os.path.join(OUT, "workspaces")
 
 
 def hr(t):
+    """Print a section heading."""
     print(f"\n=== {t} " + "=" * (60 - len(t)))
 
 
 def main():
+    """The engine's standalone end-to-end demo: build the sample deck, then probe, translate and
+    edit it with the orchestrator. Not used by the agent; the project's demo is `make demo`
+    (tests/demo.py).
+    """
     shutil.rmtree(OUT, ignore_errors=True)
     os.makedirs(WS)
     subprocess.run([sys.executable, os.path.join(ROOT, "samples/make_sample.py"), OUT], check=True)

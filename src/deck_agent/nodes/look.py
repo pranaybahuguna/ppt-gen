@@ -40,6 +40,8 @@ def review_previews(previews: list[Path], planner, context: dict | None = None,
 
     A preview is named `slide-NN.png`, 1-based, so the slide index is recoverable from the
     filename - the same convention the engine's renderer uses.
+
+    Called by: nodes.edit._look_at_one, look; tests/validate_real_model.py.
     """
     s = settings()
     if not previews:
@@ -48,6 +50,7 @@ def review_previews(previews: list[Path], planner, context: dict | None = None,
         return [], ["this planner cannot look at pictures"]
 
     def one(path: Path):
+        """Send one slide picture to the vision model. -> (slide index, answer, error)"""
         try:
             index = int(path.stem.split("-")[-1]) - 1
         except (ValueError, IndexError):
@@ -88,6 +91,10 @@ def review_previews(previews: list[Path], planner, context: dict | None = None,
 
 
 def _slide_number(uri: str) -> int:
+    """The slide number in a preview's file name (`slide-07.png` -> 7).
+
+    Called by: look, to skip slides that are about to be reworked.
+    """
     import re
 
     m = re.search(r"slide-(\d+)\.png$", str(uri))
@@ -95,7 +102,19 @@ def _slide_number(uri: str) -> int:
 
 
 def look(state, planner=None, log=print) -> dict:
-    """The graph node. Off unless `vision_review` is on; never blocks delivery."""
+    """Have a vision model look at each rendered slide; high-severity problems become findings.
+
+    Graph node. Runs: after assemble, edit_apply and translate_apply - every build. Returns at
+        once when settings.vision_review is off. Skips slides about to be, or already, reworked
+        by code.
+    Reads: previews, findings, pending_code, code_slides, plan.
+    Writes: findings (plus what was seen), vision_notes (low severity, reported not acted on);
+        errors when there was nothing rendered to look at.
+    Next: graph.after_look -> the route's own decision.
+    Called by: LangGraph, registered in graph.build_graph.
+
+    The graph node. Off unless `vision_review` is on; never blocks delivery.
+    """
     s = settings()
     if not s.vision_review:
         return {"trace": [step("look", outcome="not asked for")]}

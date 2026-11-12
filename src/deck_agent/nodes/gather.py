@@ -44,7 +44,10 @@ MIN_FACTS = 3                  # fewer than this is not a deck; ask for more ins
 # --------------------------------------------------------------------------- reading context
 
 def read_document(name: str, data: bytes) -> str:
-    """A document's text. Raises ValueError for a kind it cannot read, saying which."""
+    """A document's text. Raises ValueError for a kind it cannot read, saying which.
+
+    Called by: gather.
+    """
     suffix = Path(name).suffix.lower()
     if suffix in TEXT_TYPES:
         return data.decode("utf-8", errors="replace")
@@ -56,7 +59,10 @@ def read_document(name: str, data: bytes) -> str:
 
 def _docx_text(data: bytes) -> str:
     """Paragraphs out of a .docx without a dependency: it is a zip with one XML part that
-    matters. Headings keep a '#' so sections survive into the facts' `source`."""
+    matters. Headings keep a '#' so sections survive into the facts' `source`.
+
+    Called by: read_document.
+    """
     with zipfile.ZipFile(io.BytesIO(data)) as z:
         xml = z.read("word/document.xml").decode("utf-8", errors="replace")
     out = []
@@ -70,7 +76,10 @@ def _docx_text(data: bytes) -> str:
 
 
 def chunks(name: str, text: str, limit: int = CHUNK_CHARS) -> list[dict]:
-    """Split long text at headings (or blank lines) into pieces of at most `limit` chars."""
+    """Split long text at headings (or blank lines) into pieces of at most `limit` chars.
+
+    Called by: gather.
+    """
     if len(text) <= limit:
         return [{"name": name, "text": text}]
     parts = re.split(r"(?m)^(?=#{1,3} )", text)
@@ -101,14 +110,20 @@ _DASHES = str.maketrans({"–": "-", "—": "-", "−": "-", "‘": "'",
 
 def norm(text: str) -> str:
     """What two pieces of text are compared as: no Markdown, no typographic variants, one
-    space between words, lower case. Generous about formatting, strict about words."""
+    space between words, lower case. Generous about formatting, strict about words.
+
+    Called by: check, supported.
+    """
     text = _LINK.sub(r"\1", str(text)).translate(_DASHES)
     text = _MARKS.sub(" ", text)
     return " ".join(text.split()).lower()
 
 
 def supported(quote: str, source: str) -> bool:
-    """Is the quote really in the source? An elided quote ("a ... b") needs each part, in order."""
+    """Is the quote really in the source? An elided quote ("a ... b") needs each part, in order.
+
+    Called by: check.
+    """
     parts = [norm(p) for p in re.split(r"\.\.\.|…", quote or "") if norm(p)]
     if not parts or sum(len(p.split()) for p in parts) < 3:
         return False
@@ -122,7 +137,10 @@ def supported(quote: str, source: str) -> bool:
 
 
 def check(answer: dict, sources: list[dict]) -> tuple[dict, dict]:
-    """Keep what the sources support. -> (content pack, report of what was dropped and why)"""
+    """Keep what the sources support. -> (content pack, report of what was dropped and why)
+
+    Called by: gather.
+    """
     whole = norm("\n".join(s["text"] for s in sources))
     facts, dropped, seen = [], [], set()
     for f in answer.get("facts") or []:
@@ -157,13 +175,27 @@ def check(answer: dict, sources: list[dict]) -> tuple[dict, dict]:
 
 
 def _plain_number(n: str) -> str:
-    """1200.0 -> 1200: a number the model returned as a float was written as an integer."""
+    """1200.0 -> 1200: a number the model returned as a float was written as an integer.
+
+    Called by: check.
+    """
     return n[:-2] if n.endswith(".0") else n
 
 
 # --------------------------------------------------------------------------- the node
 
 def gather(state: DeckState, planner=None, log=print) -> dict:
+    """Write the facts a new deck may state, from the request and any context documents.
+
+    Graph node. Runs: on the create route, after route and before ensure_kit. Does nothing when
+        the caller supplied a content pack or an outline.
+    Reads: instruction, context_docs (object URIs), content_pack, outline.
+    Writes: content_pack (facts whose quotes were found in the source); or route='ask' with
+        pending_question when there is too little to go on; route='decline' without a model.
+        Publishes content_pack.json and gather_report.json in the run folder.
+    Next: after_gather -> ensure_kit | ask | decline.
+    Called by: LangGraph, registered in graph.build_graph.
+    """
     if (state.get("content_pack") or {}).get("facts") or state.get("outline"):
         return {"trace": [step("gather", outcome="supplied by the caller")]}
 
@@ -221,6 +253,10 @@ def gather(state: DeckState, planner=None, log=print) -> dict:
 
 
 def after_gather(state: DeckState) -> str:
+    """Decision after gather: ask or decline if gather said so, otherwise ensure_kit.
+
+    Called by: LangGraph, as the conditional edge out of gather (graph.build_graph).
+    """
     chosen = state.get("route")
     if chosen in ("ask", "decline"):
         return chosen

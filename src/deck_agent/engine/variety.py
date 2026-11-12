@@ -40,6 +40,10 @@ MAX_REDONE = 1 / 3   # never ask for more than this much of the deck to be laid 
 
 
 def _kind(pattern: str | None) -> str:
+    """A layout's base name: `columns@2` and `columns` are the same layout.
+
+    Called by: repetitive, spread, spread.free, without.
+    """
     return str(pattern or "").split("@")[0]
 
 
@@ -48,6 +52,8 @@ def repetitive(patterns: list[str]) -> list[tuple[int, str]]:
 
     `patterns` is the layout chosen for each slide, in deck order. The returned indices are
     into that same list.
+
+    Called by: nodes.create.render_slides.
     """
     movable = [i for i, p in enumerate(patterns) if _kind(p) not in FIXED]
     if len(movable) < 3:
@@ -82,11 +88,18 @@ def repetitive(patterns: list[str]) -> list[tuple[int, str]]:
 
 
 def without(options: list[dict], avoid: str) -> list[dict]:
-    """The same options with one layout removed. Empty means "leave the slide alone"."""
+    """The same options with one layout removed. Empty means "leave the slide alone".
+
+    Called by: nodes.create.render_slides.
+    """
     return [o for o in options if _kind(o.get("pattern")) != _kind(avoid)]
 
 
 def describe(changes: list[dict]) -> str:
+    """Variety changes in words for the log: `slide 4 columns -> text`.
+
+    Called by: render_slides.
+    """
     return ", ".join(f"slide {c['slide']} {c['from']} -> {c['to']}" for c in changes)
 
 
@@ -118,6 +131,8 @@ def spread(jobs: list[dict]) -> tuple[list[dict], list[dict]]:
 
     It is a prior, not a decision: the model may still pick something else, and the pass after
     stage 2 is what catches that. -> (jobs, what was reordered)
+
+    Called by: nodes.create.render_slides.
     """
     movable = [j for j in jobs
                if j.get("options") and _kind(j["options"][0].get("pattern")) not in FIXED]
@@ -139,6 +154,7 @@ def spread(jobs: list[dict]) -> tuple[list[dict], list[dict]]:
             continue
 
         def free(option) -> bool:
+            """Layouts still unclaimed that this slide could use."""
             kind = _kind(option.get("pattern"))
             if used.get(kind, 0) >= cap:
                 return False
@@ -177,6 +193,8 @@ def budget(chosen: list[str | None], limit: int) -> list[int]:
     `chosen[i]` is slide i's layout (None when it has none). The cover keeps its layout; a
     slide is over budget when its layout has already been used `limit` times, or when it is the
     same layout as the slide before it (the repetition a reader notices first).
+
+    Called by: nodes.create.render_slides, nodes.create.repair.
     """
     if limit <= 0:
         return []
@@ -235,6 +253,8 @@ def assign_forms(contents: list[dict]) -> list[str]:
     Deterministic, so the code for every designed slide can be written in parallel and still
     come out varied: each slide takes the first form for its kind that the deck has not used
     yet, and only when all of those are taken, the least-used form overall.
+
+    Called by: nodes.create.render_slides, nodes.custom_code.custom_code.
     """
     used: dict[str, int] = {}
     out = []

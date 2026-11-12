@@ -61,6 +61,9 @@ class S:
     """The facts about one shape that the rules need."""
 
     def __init__(self, sh):
+        """A shape's facts the drafting rules need, in slide coordinates: id, box, kind, text,
+        size.
+        """
         self.id = sh.shape_id
         # Slide coordinates, always: a shape inside a group states its position in that
         # group's own space, which cannot be compared with anything else on the slide.
@@ -94,14 +97,17 @@ class S:
 
     @property
     def area(self):
+        """Width times height."""
         return self.w * self.h
 
     @property
     def bottom(self):
+        """The bottom edge."""
         return self.y + self.h
 
 
 def _fill_colour(sh):
+    """A shape's solid fill colour as RRGGBB, or None."""
     try:
         if sh.fill.type == 1 and sh.fill.fore_color.type is not None:
             return str(sh.fill.fore_color.rgb)
@@ -111,6 +117,7 @@ def _fill_colour(sh):
 
 
 def _is_grey(hexc):
+    """Whether a colour is white, black or grey - not a brand colour."""
     r, g, b = int(hexc[0:2], 16), int(hexc[2:4], 16), int(hexc[4:6], 16)
     return max(r, g, b) - min(r, g, b) < 24          # white, black and greys aren't brand colours
 
@@ -147,6 +154,10 @@ def chart_style(prs):
 # ---- slide furniture: title, subtitle, page number, footer --------------------------------
 
 def find_chrome(shapes, W, H):
+    """The slide's title (the largest text near the top) and other chrome: page number, footer.
+
+    Called by: slide_pattern.
+    """
     texts = [s for s in shapes if s.kind == "text"]
     chrome = {}
     big = max((s.size or 0) for s in texts) if texts else 0
@@ -172,6 +183,7 @@ def find_chrome(shapes, W, H):
 # ---- repeated items -----------------------------------------------------------------------
 
 def _row_major(insts):
+    """Shapes in reading order: rows in 0.2-inch bands, then left to right."""
     return sorted(insts, key=lambda s: (round(s.y / 182880), s.x))     # rows in 0.2-inch bands
 
 
@@ -189,6 +201,7 @@ def find_items(shapes, exclude):
         by_sig.setdefault(s.sig, []).append(s)
 
     def at(sig, x, y, taken):
+        """An unclaimed shape of this signature at about this position, or None."""
         for t in by_sig.get(sig, []):
             if t not in taken and abs(t.x - x) <= TOL and abs(t.y - y) <= TOL:
                 return t
@@ -246,6 +259,8 @@ def item_roles(groups):
             rest.remove((i, s))
             break
     def is_value(i, s):                  # big, short, and clearly bigger than the item's other text
+        """Whether an item's text is its headline figure: short, number-like, and clearly larger.
+        """
         others = [t.size or 12 for j, t in rest if j != i]
         return (len(s.text) <= 10 and NUMBER_LIKE.search(s.text) and others
                 and (s.size or 12) >= 1.5 * min(others))
@@ -270,6 +285,12 @@ def item_roles(groups):
 # ---- one slide → one pattern ---------------------------------------------------------------
 
 def slide_pattern(slide, n, total, W, H):
+    """Draft a pattern from one example slide: its title and chrome, its repeated items (by
+    matching signatures and spacing), its single fields, charts and tables, and the decoration
+    to keep. -> the pattern, or None with notes saying why the slide cannot be one.
+
+    Called by: draft_kit, for every slide.
+    """
     shapes = [S(sh) for sh in leaves(slide.shapes)]
     notes = []
     ids = Counter(e.get("id") for e in slide.shapes._spTree.iter("{http://schemas.openxmlformats.org/presentationml/2006/main}cNvPr"))
@@ -292,6 +313,7 @@ def slide_pattern(slide, n, total, W, H):
     content_area = 0.15 * W * H
 
     def holds_something(box):            # a background panel has other shapes sitting on it
+        """Whether other shapes sit on this box - a background panel, not content."""
         return any(o is not box and box.x <= o.x + o.w / 2 <= box.x + box.w and box.y <= o.y + o.h / 2 <= box.bottom
                    for o in shapes)
     charts = sorted([s for s in shapes if s not in used and s.kind in ("box", "text") and s.area > content_area
@@ -342,7 +364,8 @@ def slide_pattern(slide, n, total, W, H):
 
 
 def kind_of(p, n, total):
-    """Name a pattern from what it holds. Used by the rules, and again after vision relabels boxes."""
+    """Name a pattern from what it holds. Used by the rules, and again after vision relabels boxes.
+    """
     roles = set(p.get("items", {}).get("fields", {}))
     if n == 1 and p.get("big_text"):
         return "cover"
@@ -359,7 +382,9 @@ def kind_of(p, n, total):
 
 
 def consistent(kind, p, n, total):
-    """Can a pattern with this content honestly be called `kind`? (vision's kind is accepted only if so)"""
+    """Can a pattern with this content honestly be called `kind`? (vision's kind is accepted only
+    if so)
+    """
     roles = set(p.get("items", {}).get("fields", {}))
     need = {"steps": "number" in roles, "stats": "value" in roles, "table": "table" in p,
             "chart": len(p.get("charts", {})) == 1, "two_charts": len(p.get("charts", {})) == 2,
@@ -425,6 +450,7 @@ def _decorative(sh, sha, often, W, H):
 
 
 def _pic_sha(sh):
+    """A picture's content hash, or None: how a repeated logo is recognised as decoration."""
     import hashlib
     try:
         return hashlib.sha256(sh.image.blob).hexdigest()[:16]
@@ -433,6 +459,11 @@ def _pic_sha(sh):
 
 
 def draft_kit(path: str, template_name: str, dedupe: bool = True) -> dict:
+    """Draft a kit from a template by rules alone: a pattern per usable slide, with notes for the
+    slides that were skipped and why. No model.
+
+    Called by: the agent's engine.kitbuild.draft, the first step of ingesting a template.
+    """
     prs = Presentation(path)
     # a picture that appears on at least half the slides is decoration (e.g. a logo); others are content
     seen = Counter()

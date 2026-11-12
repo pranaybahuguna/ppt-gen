@@ -3,7 +3,8 @@
 Grammar (all ids are the deck's own stable ids, not positions, except para/run/cell):
 
     slide:<sldId>                                    p:sldId/@id  - stable across reorder
-    slide:<sldId>/shape:<id>                         p:cNvPr/@id  - unique within a slide (groups included)
+    slide:<sldId>/shape:<id>                         p:cNvPr/@id  - unique within a slide (groups
+    included)
     slide:<sldId>/shape:<id>/para:<i>
     slide:<sldId>/shape:<id>/para:<i>/run:<j>
     slide:<sldId>/shape:<id>/cell:<r>,<c>/para:<i>   table cell
@@ -34,15 +35,22 @@ _REF_RE = re.compile(
 
 
 def sha(text: str) -> str:
+    """The first 10 hex digits of a text's SHA-256: the fingerprint an edit carries, so a change to
+    text that moved since it was read is refused.
+
+    Called by: probe (each paragraph's `sha`), the executor (checking `expect` before a write).
+    """
     return hashlib.sha256(text.encode("utf-8")).hexdigest()[:10]
 
 
 class RefError(Exception):
+    """An address that does not resolve: no such slide, shape, paragraph or run."""
     pass
 
 
 @dataclass
 class Ref:
+    """A parsed address: slide id, and optionally shape, paragraph, run, table cell or notes."""
     slide: int
     shape: int | None = None
     row: int | None = None
@@ -53,6 +61,11 @@ class Ref:
 
     @classmethod
     def parse(cls, s: str) -> "Ref":
+        """Parse an address such as `slide:257/shape:4/para:1` or `slide:257/notes`; RefError if
+        malformed.
+
+        Called by: the executor, for every operation's target.
+        """
         m = _REF_RE.match(s)
         if not m:
             raise RefError(f"malformed ref: {s!r}")
@@ -62,6 +75,7 @@ class Ref:
                    bool(g["notes"]), as_int("para"), as_int("run"))
 
     def __str__(self) -> str:
+        """The address back as text - the inverse of parse."""
         s = f"slide:{self.slide}"
         if self.notes:
             s += "/notes"
@@ -84,10 +98,15 @@ def para_tokens(p_el):
 
 
 def para_runs(p_el):
+    """The text runs (`a:r`) of a paragraph element."""
     return [c for c in p_el if c.tag == qn("a:r")]
 
 
 def para_text(p_el) -> str:
+    """A paragraph's text, line breaks as newlines.
+
+    Called by: probe, and the executor when checking a paragraph's fingerprint.
+    """
     out = []
     for c in para_tokens(p_el):
         if c.tag == qn("a:br"):
@@ -124,6 +143,7 @@ _TOKEN_RE = re.compile(r"<r(\d+)>(.*?)</r\1>|<br/>|<f(\d+)/>", re.S)
 
 
 class TagError(ValueError):
+    """Tagged text that is malformed or names runs the paragraph does not have."""
     pass
 
 
@@ -151,12 +171,17 @@ def parse_tagged(value: str):
 
 
 def text_body_paragraphs(txBody):
+    """The paragraphs of a text body, or [] when there is none."""
     return txBody.findall(qn("a:p")) if txBody is not None else []
 
 
 # ---- resolution against a live python-pptx Presentation ---------------------
 
 def find_slide(prs, slide_id: int):
+    """The slide with this id; RefError when there is none.
+
+    Called by: the executor, resolving a ref.
+    """
     s = prs.slides.get(slide_id)
     if s is None:
         raise RefError(f"no slide with id {slide_id}")
@@ -164,6 +189,11 @@ def find_slide(prs, slide_id: int):
 
 
 def find_shape_el(slide, shape_id: int):
+    """A shape's XML element by id, searched anywhere in the slide - groups included; RefError when
+    there is none.
+
+    Called by: the executor, resolving a ref.
+    """
     hits = slide.shapes._spTree.xpath(f".//p:cNvPr[@id='{shape_id}']")
     if not hits:
         raise RefError(f"slide {slide.slide_id}: no shape id {shape_id}")
@@ -172,6 +202,10 @@ def find_shape_el(slide, shape_id: int):
 
 
 def shape_txBody(shape_el, row=None, col=None):
+    """A shape's text body, or one table cell's when row and col are given.
+
+    Called by: the executor, before reading or writing text.
+    """
     if row is not None:
         trs = shape_el.findall(".//" + qn("a:tr"))
         if row >= len(trs):

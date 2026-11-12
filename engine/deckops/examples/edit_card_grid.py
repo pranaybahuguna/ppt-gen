@@ -38,6 +38,9 @@ CARDS = [
 def main(src, dst):
     # The control plane never opens the deck: the compiler resolves "slide 7" against the
     # DeckIndex that the sandboxed probe produced.
+    """Re-lay out slide 7's card grid from a hand-written plan, through the standalone
+    orchestrator.
+    """
     plan = {"mode": "edit", "slide_number": 7, "columns": 3, "cards": CARDS}
     run, man = orchestrator.edit(os.path.join(ROOT, "out", "workspaces"), src, plan, compile_card_grid, [7],
                                  "hand-written plan (stands in for the model)")

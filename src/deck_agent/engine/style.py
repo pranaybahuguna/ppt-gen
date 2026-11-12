@@ -50,7 +50,10 @@ THEME_SLOTS = ("accent1", "accent2", "accent3", "accent4", "accent5", "accent6",
 
 
 def normalise_colour(value: str | None) -> str | None:
-    """"dark red" or "#8B0000" or "8b0000" -> "8B0000". Anything else -> None."""
+    """"dark red" or "#8B0000" or "8b0000" -> "8B0000". Anything else -> None.
+
+    Called by: engine.edits.compile_edit, apply_theme_colours.
+    """
     if not value:
         return None
     text = str(value).strip()
@@ -74,6 +77,10 @@ class StyleChange:
     font_size_pt: float | None = None
 
     def describe(self) -> str:
+        """This change in words, for the changelog: where it applies and what it sets.
+
+        Called by: apply_styles.
+        """
         where = (f"shape {self.ref}" if self.scope == "shape"
                  else f"slide {self.slide}" if self.scope == "slide" else "the whole deck")
         what = []
@@ -91,6 +98,10 @@ class StyleChange:
 
     @property
     def empty(self) -> bool:
+        """True when the change sets nothing (no colour, size, bold or italic).
+
+        Called by: compile_edit, which drops empty changes instead of applying them.
+        """
         return not any((self.text_colour, self.fill_colour, self.font_size_pt,
                         self.bold is not None, self.italic is not None))
 
@@ -98,7 +109,10 @@ class StyleChange:
 # --------------------------------------------------------------------------- shapes and text
 
 def _target_shapes(prs, change: StyleChange):
-    """The shapes one change applies to, with the paragraph index when the ref names one."""
+    """The shapes one change applies to, with the paragraph index when the ref names one.
+
+    Called by: apply_styles.
+    """
     want_slide_id = want_shape_id = want_para = None
     if change.scope == "shape":
         if not change.ref:
@@ -124,7 +138,10 @@ def _target_shapes(prs, change: StyleChange):
 
 
 def _recolour_shape(shape, change: StyleChange, para_index: int | None) -> int:
-    """Apply a change to one shape. -> how many runs (or fills) were touched."""
+    """Apply a change to one shape. -> how many runs (or fills) were touched.
+
+    Called by: apply_styles.
+    """
     from pptx.dml.color import RGBColor
     from pptx.util import Pt
 
@@ -159,7 +176,10 @@ def _recolour_shape(shape, change: StyleChange, para_index: int | None) -> int:
 
 
 def apply_styles(src: str | Path, changes: list[StyleChange], dst: str | Path) -> dict:
-    """Apply visual changes and save byte-preservingly. -> a report for the changelog."""
+    """Apply visual changes and save byte-preservingly. -> a report for the changelog.
+
+    Called by: nodes.edit.edit_apply.
+    """
     bootstrap()
     from pptx import Presentation
 
@@ -190,6 +210,8 @@ def apply_theme_colours(src: str | Path, slots: dict[str, str], dst: str | Path)
     This is what "use a green accent instead of blue" has to mean. A shape whose colour was
     typed in as an explicit RGB value does not inherit, so it will not move; the count of those
     is returned, because a caller that says "done" when half the deck did not change is lying.
+
+    Called by: nodes.edit.edit_apply.
     """
     bootstrap()
     from lxml import etree

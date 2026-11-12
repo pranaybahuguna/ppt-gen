@@ -12,10 +12,12 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
 
 class _Op(BaseModel):
+    """Base of every operation: unknown fields are refused."""
     model_config = ConfigDict(extra="forbid")
 
 
 class Expect(BaseModel):
+    """A fingerprint an edit must match: the text's sha when it was read."""
     model_config = ConfigDict(extra="forbid")
     text_sha: str
 
@@ -30,6 +32,7 @@ class SetParagraphText(_Op):
 
 
 class SetRunText(_Op):
+    """Replace one run's text, keeping its formatting."""
     op: Literal["set_run_text"]
     target: str
     expect: Expect
@@ -44,12 +47,14 @@ class SetFontSize(_Op):
 
 
 class TextContent(BaseModel):
+    """Plain text for a placeholder."""
     model_config = ConfigDict(extra="forbid")
     kind: Literal["text"]
     text: str
 
 
 class BulletsContent(BaseModel):
+    """Bullet points for a placeholder."""
     model_config = ConfigDict(extra="forbid")
     kind: Literal["bullets"]
     items: list[str] = Field(min_length=1)
@@ -59,6 +64,7 @@ Content = Annotated[Union[TextContent, BulletsContent], Field(discriminator="kin
 
 
 class AddSlide(_Op):
+    """Add a slide on a layout and fill its placeholders (the layout-based create path)."""
     op: Literal["add_slide"]
     layout: str                     # layout id from the template catalog, e.g. "M0L1"
     after: str | None = None        # slide ref; None = append
@@ -68,11 +74,13 @@ class AddSlide(_Op):
 
 
 class DeleteSlide(_Op):
+    """Delete a slide."""
     op: Literal["delete_slide"]
     target: str
 
 
 class DeleteShape(_Op):
+    """Delete a shape."""
     op: Literal["delete_shape"]
     target: str
 
@@ -115,6 +123,7 @@ class SetTable(_Op):
 
 
 class ChartSeries(BaseModel):
+    """One data series for a chart."""
     model_config = ConfigDict(extra="forbid")
     name: str
     values: list[float]
@@ -145,6 +154,9 @@ Step = Annotated[
 
 
 class AddSlideFromPattern(_Op):
+    """Copy an example slide and apply steps to the copy: set text, duplicate, delete, move, fill
+    tables and charts. What a kit-based plan compiles to - one per slide.
+    """
     op: Literal["add_slide_from_pattern"]
     source: str                 # the example slide to copy, e.g. "slide:258"
     steps: list[Step] = []

@@ -25,10 +25,19 @@ from .state import DeckState, new_state, summarise, turn_reset
 
 
 def _config(deck_id: str) -> dict:
+    """The LangGraph config that selects this deck's conversation: thread_id = deck_id.
+
+    Called by: _invoke, answer, session, undo.
+    """
     return {"configurable": {"thread_id": deck_id}}
 
 
 def _run_id() -> str:
+    """A new run id, `YYYYmmdd-HHMMSS-xxxxxx`: one per turn, and the run folder's name in the
+    bucket.
+
+    Called by: _invoke, when the caller does not supply one.
+    """
     import time
 
     return time.strftime("%Y%m%d-%H%M%S-") + uuid.uuid4().hex[:6]
@@ -40,6 +49,8 @@ def _tidy_if_asked(deck_id: str, result: dict, s: Settings) -> dict:
     Only after a delivered result: a turn that stopped to ask a question is still running, and
     its outline is exactly what the answer will be applied to. A failed tidy never fails the
     turn - the deck was already delivered - it is reported beside it instead.
+
+    Called by: _invoke, answer.
     """
     if not (s.tidy_after_turn and result.get("ok")):
         return result
@@ -56,7 +67,10 @@ def _tidy_if_asked(deck_id: str, result: dict, s: Settings) -> dict:
 
 
 def _result(state: dict) -> dict:
-    """One shape for every outcome, so the caller has one branch."""
+    """One shape for every outcome, so the caller has one branch.
+
+    Called by: _invoke, answer.
+    """
     if state.get("pending_question"):
         return {"ok": False, "question": state["pending_question"],
                 "session": summarise(state)}      # type: ignore[arg-type]
@@ -68,6 +82,14 @@ def _result(state: dict) -> dict:
 
 
 def _invoke(deck_id: str, payload: dict, planner=None, log=print, s: Settings | None = None) -> dict:
+    """Run one turn of a deck's conversation through the graph and return the result.
+
+    On a new deck_id it builds a fresh state (state.new_state); on an existing one it resets the
+    per-turn fields (state.turn_reset) and keeps the deck, kit and plan. Stops early with a
+    question when the graph interrupts. Afterwards, with tidy_after_turn on, tidies the deck.
+
+    Called by: create_deck, edit_deck, translate_deck, ask_deck.
+    """
     s = s or settings()
     with deck_graph(planner, log, s) as graph:
         existing = graph.get_state(_config(deck_id))
@@ -99,6 +121,8 @@ def create_deck(deck_id: str, brief: str, content_pack: dict | None = None,
     `brief` is what the person said - it may carry all the context there is. `context` is any
     documents (object URIs) the deck should be based on. From those two, `gather` writes the
     facts the deck may state. `content_pack` skips that and supplies the facts directly.
+
+    Called by: cli.cmd_create; tests/demo.py.
     """
     return _invoke(deck_id, {"instruction": brief, "content_pack": content_pack,
                              "template": template, "route": None,
@@ -108,24 +132,36 @@ def create_deck(deck_id: str, brief: str, content_pack: dict | None = None,
 
 
 def edit_deck(deck_id: str, instruction: str, planner=None, log=print, **kw) -> dict:
-    """Change the deck this session is working on."""
+    """Change the deck this session is working on.
+
+    Called by: cli.cmd_edit; tests/demo.py.
+    """
     return _invoke(deck_id, {"instruction": instruction, **kw}, planner, log)
 
 
 def translate_deck(deck_id: str, lang: str, slides: list[int] | None = None,
                    planner=None, log=print, **kw) -> dict:
-    """The same deck in another language. `slides` are 1-based; None means all of them."""
+    """The same deck in another language. `slides` are 1-based; None means all of them.
+
+    Called by: cli.cmd_translate; tests/demo.py.
+    """
     return _invoke(deck_id, {"instruction": f"translate into {lang}", "target_lang": lang,
                              "slide_scope": slides, "route": "translate", **kw}, planner, log)
 
 
 def ask_deck(deck_id: str, instruction: str, planner=None, log=print, **kw) -> dict:
-    """Let the router work out what is wanted. The general entry point."""
+    """Let the router work out what is wanted. The general entry point.
+
+    Called by: cli.cmd_ask, cli.cmd_attach; tests/demo.py.
+    """
     return _invoke(deck_id, {"instruction": instruction, **kw}, planner, log)
 
 
 def answer(deck_id: str, text: str, planner=None, log=print, s: Settings | None = None) -> dict:
-    """Answer a question the graph asked, and carry on from the node that asked it."""
+    """Answer a question the graph asked, and carry on from the node that asked it.
+
+    Called by: cli.cmd_answer; tests/demo.py.
+    """
     from langgraph.types import Command
 
     s = s or settings()
@@ -141,7 +177,10 @@ def answer(deck_id: str, text: str, planner=None, log=print, s: Settings | None 
 # --------------------------------------------------------------------------- the session
 
 def session(deck_id: str, planner=None, s: Settings | None = None) -> dict:
-    """What this session knows: which deck, how many versions, which template and kit."""
+    """What this session knows: which deck, how many versions, which template and kit.
+
+    Called by: cli.cmd_session; tests/demo.py.
+    """
     s = s or settings()
     with deck_graph(planner, lambda *a, **k: None, s) as graph:
         snapshot = graph.get_state(_config(deck_id))
@@ -161,6 +200,8 @@ def undo(deck_id: str, planner=None, s: Settings | None = None) -> dict:
 
     This is why versions are appended and never overwritten: undo is dropping the last entry,
     and the file it pointed at is still in the bucket if anyone wants it back.
+
+    Called by: cli.cmd_undo; tests/demo.py.
     """
     s = s or settings()
     with deck_graph(planner, lambda *a, **k: None, s) as graph:

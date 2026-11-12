@@ -39,6 +39,11 @@ class AgentPlanner(OpenAICompatPlanner):
     """The engine's planner, plus routing, editing and code writing."""
 
     def route(self, instruction: str, context: dict) -> dict:
+        """Ask the model which route a request is (ROUTE_SYSTEM). -> {route, confidence, reason,
+        ...}
+
+        Called by: nodes.router.route, only when the rules are unsure.
+        """
         return self._chat(ROUTE_SYSTEM, json.dumps({"request": instruction, "session": context},
                                                    ensure_ascii=False))
 
@@ -48,11 +53,22 @@ class AgentPlanner(OpenAICompatPlanner):
             {"request": request, "sources": sources}, ensure_ascii=False))
 
     def plan_edit(self, instruction: str, slides: list[dict], context: dict | None = None) -> dict:
+        """Ask the model to turn an edit request into typed actions (EDIT_SYSTEM). -> {actions,
+        cannot}
+
+        Called by: nodes.edit.edit_plan.
+        """
         return self._chat(EDIT_SYSTEM, json.dumps(
             {"instruction": instruction, "deck": slides, "session": context or {}}, ensure_ascii=False))
 
     def write_slide_code(self, contract: str, content: dict, style: dict, ctx: dict,
                          feedback: list[str] | None = None, previous: str | None = None) -> dict:
+        """Ask the model for python-pptx code that reworks or draws one slide (CODE_SYSTEM with the
+        sandbox contract). With feedback, the previous code and what was wrong go with it.
+        -> {code, form, explanation}
+
+        Called by: nodes.custom_code.custom_code (first drafts in parallel, then retries).
+        """
         msg = {"content": content, "style": style, "ctx_example": ctx}
         if feedback:
             msg["feedback"], msg["previous_code"] = feedback, previous
@@ -169,6 +185,10 @@ class StubAgentPlanner(StubPlanner):
     vision = False
 
     def route(self, instruction: str, context: dict) -> dict:
+        """Offline routing: the rules alone (rules_route).
+
+        Called by: nodes.router.route, in tests and the demo.
+        """
         return rules_route(instruction, context) | {"from": "stub"}
 
     def gather(self, request: str, sources: list[dict]) -> dict:
@@ -215,6 +235,12 @@ class StubAgentPlanner(StubPlanner):
         return {"actions": actions, "cannot": None if actions else "the offline stub only shortens text"}
 
     def write_slide_code(self, contract, content, style, ctx, feedback=None, previous=None) -> dict:
+        """Offline code: a fixed, working builder (STUB_SLIDE_CODE) that draws or reworks a slide
+        as a
+        row of panels.
+
+        Called by: nodes.custom_code.custom_code, in tests and the demo.
+        """
         return {"code": STUB_SLIDE_CODE, "explanation": "a row of panels, one per point"}
 
     def review_slide(self, png, context=None) -> dict:
@@ -228,6 +254,8 @@ def rules_route(instruction: str, context: dict) -> dict:
     These are the cases where a model call would be waste: there is no deck at all, or the verb
     is unambiguous. Anything else returns a low confidence and lets the caller decide whether to
     spend a call or ask the person.
+
+    Called by: StubAgentPlanner.route, nodes.router.route.
     """
     text = instruction or ""
     has_deck = bool(context.get("has_current_deck") or context.get("has_attached_deck"))
@@ -270,7 +298,11 @@ _ORDINALS = {"first": 1, "second": 2, "third": 3, "fourth": 4, "fifth": 5, "sixt
 
 
 def _slide_numbers(text: str) -> list[int]:
-    """'slide 3', 'slides 2 and 5', 'slides 2-4', 'the first slide' -> [3] / [2,5] / [2,3,4] / [1]."""
+    """'slide 3', 'slides 2 and 5', 'slides 2-4', 'the first slide' -> [3] / [2,5] / [2,3,4] / [1].
+
+
+    Called by: StubAgentPlanner.plan_edit, rules_route.
+    """
     out: list[int] = []
     for a, b in re.findall(r"slides?\s+(\d+)\s*(?:-|to|through)\s*(\d+)", text, re.IGNORECASE):
         out += list(range(int(a), int(b) + 1))
@@ -296,6 +328,10 @@ class LangChainPlanner(AgentPlanner):
     """
 
     def __init__(self, base_url: str, model: str, api_key: str = "", **kw):
+        """The same planner, its HTTP calls made through langchain-openai's ChatOpenAI.
+
+        Called by: planner(), when llm_client is 'langchain'.
+        """
         super().__init__(base_url, model, api_key)
         from langchain_openai import ChatOpenAI
 
@@ -305,6 +341,10 @@ class LangChainPlanner(AgentPlanner):
                                model_kwargs={"response_format": {"type": "json_object"}}, **kw)
 
     def _post(self, messages) -> dict:
+        """Send one chat request through LangChain and return the parsed JSON answer.
+
+        Called by: the inherited _chat and _chat_images, in place of the raw HTTP call.
+        """
         reply = self._llm.invoke([(m["role"], m["content"]) for m in messages])
         text = reply.content if isinstance(reply.content, str) else json.dumps(reply.content)
         try:
@@ -316,7 +356,11 @@ class LangChainPlanner(AgentPlanner):
 # ---------------------------------------------------------------- factory
 
 def planner(s: Settings | None = None):
-    """The planner this process should use, from settings. Never reads a key from the environment."""
+    """The planner this process should use, from settings. Never reads a key from the environment.
+
+
+    Called by: cli.cmd_doctor, cli.cmd_kit, graph.deck_graph; tests/validate_real_model.py.
+    """
     s = s or settings()
     if s.llm_client == "stub":
         return StubAgentPlanner()

@@ -23,44 +23,60 @@ from ..state import DeckState
 
 
 def new_run_id() -> str:
+    """A new run id, `YYYYmmdd-HHMMSS-xxxxxx`.
+
+    Called by: intake and workspace(), when the state has none yet.
+    """
     return time.strftime("%Y%m%d-%H%M%S-") + uuid.uuid4().hex[:6]
 
 
 def workspace(state: DeckState, keep: bool | None = None):
-    """A scratch directory for this node, with the store attached."""
+    """A scratch directory for this node, with the store attached.
+
+    Called by: nodes.create.assemble, nodes.create.outline, nodes.create.render_slides,
+        nodes.create.repair, nodes.custom_code.custom_code, nodes.deliver.deliver,
+        nodes.edit.edit_apply, and 8 more.
+    """
     s = settings()
     return open_workspace(state["thread_id"], state.get("run_id") or new_run_id(), s,
                           keep=bool(keep))
 
 
-def fetch_current(state: DeckState, ws: Workspace, name: str = "source.pptx") -> Path:
-    """The deck we are working on, on local disk."""
-    from ..state import current_deck
-
-    uri = current_deck(state) or state.get("source_deck")
-    if not uri:
-        raise ValueError("there is no deck in this session to work on")
-    return ws.fetch(uri, name)
 
 
 def next_version_name(state: DeckState) -> str:
+    """The file name the next deck version gets: v001.pptx, v002.pptx, ...
+
+    Called by: publish_version.
+    """
     return f"v{len(state.get('deck_versions') or []) + 1:03d}.pptx"
 
 
 def publish_version(state: DeckState, ws: Workspace, local_name: str) -> tuple[str, list[str]]:
-    """Publish a built deck as the next version. -> (uri, the new deck_versions list)"""
+    """Publish a built deck as the next version. -> (uri, the new deck_versions list)
+
+    Called by: nodes.create.assemble, nodes.custom_code.custom_code, nodes.edit.edit_apply,
+        nodes.translate.translate_apply.
+    """
     uri = ws.publish(local_name, next_version_name(state), versioned=True)
     return uri, [*(state.get("deck_versions") or []), uri]
 
 
 def template_fingerprint(path: str | Path) -> str:
-    """A template's content hash. The kit cache key: the same template never pays twice."""
+    """A template's content hash. The kit cache key: the same template never pays twice.
+
+    Called by: nodes.intake.intake, nodes.kit.ensure_kit.
+    """
     return sha256_file(path)
 
 
 def make_previews(state: DeckState, ws: Workspace, deck: Path,
                   pages: list[int] | None = None) -> tuple[list[str], str | None]:
-    """Render previews and publish them. -> (uris, why there are none)"""
+    """Render previews and publish them. -> (uris, why there are none)
+
+    Called by: nodes.create.assemble, nodes.custom_code.custom_code, nodes.edit.edit_apply,
+        nodes.translate.translate_apply.
+    """
     from ..sandbox.render import render
 
     result = render(deck, ws.dir("previews"), pages)
@@ -75,6 +91,8 @@ def style_brief(kit: dict, index: dict) -> dict:
     Deliberately small: a palette, a font, a text colour and two type sizes. Enough to draw a
     slide that belongs with the others, and not enough to reproduce the template's layout,
     which is the deterministic path's job.
+
+    Called by: nodes.custom_code.custom_code; tests/validate_real_model.py.
     """
     chart = kit.get("chart_style", {}) or {}
     # Type sizes: the median is body text. The *largest* size in a template is usually the
@@ -108,6 +126,8 @@ def design_frame(kit: dict, template_index: dict) -> dict:
 
     -> {"chrome_layout": {"master": m, "layout": l, "name": ...} | None,
         "body_box": {"x", "y", "w", "h"} in EMU}
+
+    Called by: nodes.custom_code.custom_code.
     """
     from collections import Counter
 
@@ -157,7 +177,10 @@ def design_frame(kit: dict, template_index: dict) -> dict:
 
 
 def blank_layout_index(index: dict) -> int:
-    """A layout with no placeholders, for code-written slides to draw on."""
+    """A layout with no placeholders, for code-written slides to draw on.
+
+    Called by: nodes.custom_code.custom_code; tests/validate_real_model.py.
+    """
     for i, lay in enumerate(index.get("layouts") or []):
         if not lay.get("placeholders"):
             return i
@@ -165,7 +188,11 @@ def blank_layout_index(index: dict) -> int:
 
 
 def warnings_of(state: DeckState) -> list[str]:
-    """The honest list of what is not right about the deck we are about to hand over."""
+    """The honest list of what is not right about the deck we are about to hand over.
+
+    Called by: nodes.create.after_assemble, nodes.deliver.deliver,
+        nodes.translate.after_translate.
+    """
     out = []
     for f in state.get("findings") or []:
         if f["kind"] == "overflow":

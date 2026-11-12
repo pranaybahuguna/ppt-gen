@@ -28,10 +28,14 @@ ROLE_BY_PH = {
 
 
 def placeholder_role(ph) -> str:
+    """What a placeholder is for: title, subtitle, body, picture, ... or chrome (date, footer,
+    number).
+    """
     return ROLE_BY_PH.get(ph.placeholder_format.type, "chrome")  # date/footer/slide no.
 
 
 def _paragraphs(base_ref: str, txBody):
+    """Each paragraph of a text body as {ref, text, sha, level, runs}: what an edit addresses."""
     out = []
     for i, p in enumerate(text_body_paragraphs(txBody)):
         text = para_text(p)
@@ -62,6 +66,11 @@ def _geom(shape):
 
 
 def _shape_entries(slide_ref: str, shapes, unsupported: list):
+    """Every shape on a slide as an index entry - ref, name, geometry in slide space, text, kind,
+    whether it can be edited and why not - groups opened up into `children`.
+
+    Called by: probe.
+    """
     for shp in shapes:
         ref = f"{slide_ref}/shape:{shp.shape_id}"
         entry = {"ref": ref, "name": shp.name, "geom": _geom(shp), "editable": True,
@@ -110,6 +119,12 @@ def _shape_entries(slide_ref: str, shapes, unsupported: list):
 
 
 def layout_catalog(prs):
+    """Every slide layout of every master, with its placeholders: id `M<master>L<layout>`, name,
+    and
+    each placeholder's index, role and position.
+
+    Called by: probe (the index's `layouts`).
+    """
     cat = []
     for mi, master in enumerate(prs.slide_masters):
         for li, layout in enumerate(master.slide_layouts):
@@ -133,6 +148,13 @@ def external_rels(prs):
 
 
 def probe(path: str) -> dict:
+    """Read a deck into the index everything else works from: slide size, layouts, and every
+    slide's
+    shapes and paragraphs with their addresses and fingerprints. Read-only.
+
+    Called by: almost everything - the agent's nodes (through engine.deck.probe), the compilers,
+    the kit builder, the checks.
+    """
     prs = Presentation(path)
     unsupported: list = []
     slides = []

@@ -14,6 +14,7 @@ EMU_IN = 914400
 
 
 def main(path, only=None):
+    """Print a deck's slides, shapes, positions and text, for looking at a template by hand."""
     prs = Presentation(path)
     for n, s in enumerate(prs.slides, start=1):
         if only and n not in only:

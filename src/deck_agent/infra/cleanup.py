@@ -50,9 +50,14 @@ class Plan:
 
     @property
     def bytes(self) -> int:
+        """Total size of the objects this plan would delete."""
         return sum(o.size for o in self.objects)
 
     def add(self, other: "Plan") -> "Plan":
+        """Merge another plan into this one, without listing an object or session twice. -> self.
+
+        Called by: cmd_clean (combining --tidy, --tests, --orphans ...), plan_tidy_all.
+        """
         seen = {o.uri for o in self.objects}
         self.objects += [o for o in other.objects if o.uri not in seen]
         self.threads += [t for t in other.threads if t not in self.threads]
@@ -61,6 +66,11 @@ class Plan:
         return self
 
     def summary(self) -> dict:
+        """What this plan would delete, for printing: counts, size, per-prefix totals, sessions,
+        notes.
+
+        Called by: cmd_clean (both the dry run and the real one).
+        """
         by_prefix: dict[str, list[int]] = {}
         for o in self.objects:
             top = o.key.split("/", 1)[0]
@@ -74,6 +84,10 @@ class Plan:
 
 
 def human(n: int) -> str:
+    """A byte count as B / KB / MB / GB.
+
+    Called by: Plan.summary, inventory, execute, cmd_ls.
+    """
     for unit in ("B", "KB", "MB", "GB"):
         if n < 1024 or unit == "GB":
             return f"{n:.0f} {unit}" if unit == "B" else f"{n:.1f} {unit}"
@@ -84,6 +98,10 @@ def human(n: int) -> str:
 # --------------------------------------------------------------------------- what is there
 
 def top_level(objects: list[Obj]) -> dict[str, list[Obj]]:
+    """Group objects by the first part of their key - one group per deck, plus kits/ and uploads/.
+
+    Called by: inventory and the plan_* functions.
+    """
     out: dict[str, list[Obj]] = {}
     for o in objects:
         out.setdefault(o.key.split("/", 1)[0], []).append(o)
@@ -95,6 +113,8 @@ def thread_ids(saver) -> set[str]:
 
     Postgres is asked directly: `saver.list()` would load every checkpoint's channel values
     just to read one column.
+
+    Called by: inventory, plan_everything, plan_orphans, plan_purge, plan_tidy_all.
     """
     conn = getattr(saver, "conn", None)
     if conn is not None:
@@ -107,16 +127,24 @@ def thread_ids(saver) -> set[str]:
 
 
 def state_of(saver, thread_id: str) -> dict:
+    """The latest checkpointed state of one conversation, as a dict ({} if there is none).
+
+    Called by: plan_tidy; tests.
+    """
     tup = saver.get_tuple({"configurable": {"thread_id": thread_id}})
     return dict(tup.checkpoint.get("channel_values") or {}) if tup else {}
 
 
 def referenced(values, bucket: str) -> set[str]:
-    """Every object URI anywhere in a session's state, however deeply nested."""
+    """Every object URI anywhere in a session's state, however deeply nested.
+
+    Called by: plan_tidy.
+    """
     out: set[str] = set()
     prefix = f"s3://{bucket}/"
 
     def walk(v):
+        """Collect every s3:// string in a nested value."""
         if isinstance(v, str):
             if v.startswith(prefix):
                 out.add(v)
@@ -132,7 +160,10 @@ def referenced(values, bucket: str) -> set[str]:
 
 
 def inventory(store: Store, saver) -> dict:
-    """What is in the bucket and the checkpointer, per deck."""
+    """What is in the bucket and the checkpointer, per deck.
+
+    Called by: cli.cmd_clean.
+    """
     groups = top_level(store.objects(""))
     threads = thread_ids(saver)
     decks = {}
@@ -152,13 +183,20 @@ def inventory(store: Store, saver) -> dict:
 
 
 def _matches(name: str, patterns) -> bool:
+    """Whether a name matches any of the shell-style patterns (`demo-*`).
+
+    Called by: inventory, plan_purge, plan_tidy_all.
+    """
     return any(fnmatch.fnmatchcase(name, p) for p in patterns)
 
 
 # --------------------------------------------------------------------------- planning
 
 def plan_purge(store: Store, saver, patterns: list[str]) -> Plan:
-    """Decks matching any of `patterns` (shell-style: `demo-*`), files and conversation both."""
+    """Decks matching any of `patterns` (shell-style: `demo-*`), files and conversation both.
+
+    Called by: cli.cmd_clean, plan_older_than.
+    """
     groups = top_level(store.objects(""))
     threads = thread_ids(saver)
     plan = Plan()
@@ -177,7 +215,10 @@ def plan_purge(store: Store, saver, patterns: list[str]) -> Plan:
 
 
 def plan_tidy(store: Store, saver, deck_id: str) -> Plan:
-    """Keep what the session needs, the latest run, and every manifest. Drop the rest."""
+    """Keep what the session needs, the latest run, and every manifest. Drop the rest.
+
+    Called by: tidy_session.
+    """
     plan = Plan()
     values = state_of(saver, deck_id)
     objs = store.objects(f"{deck_id}/")
@@ -199,6 +240,10 @@ def plan_tidy(store: Store, saver, deck_id: str) -> Plan:
 
 
 def plan_tidy_all(store: Store, saver, patterns: list[str] | None = None) -> Plan:
+    """plan_tidy for every deck that has a conversation (or only those matching `patterns`).
+
+    Called by: cmd_clean --tidy.
+    """
     plan = Plan()
     for deck in sorted(thread_ids(saver)):
         if patterns and not _matches(deck, patterns):
@@ -209,7 +254,10 @@ def plan_tidy_all(store: Store, saver, patterns: list[str] | None = None) -> Pla
 
 def plan_orphans(store: Store, saver) -> Plan:
     """Files with no conversation (nothing will read them) and conversations with no files
-    (they point at decks that are gone)."""
+    (they point at decks that are gone).
+
+    Called by: cli.cmd_clean.
+    """
     groups = top_level(store.objects(""))
     threads = thread_ids(saver)
     plan = Plan()
@@ -221,7 +269,10 @@ def plan_orphans(store: Store, saver) -> Plan:
 
 
 def plan_older_than(store: Store, saver, seconds: float) -> Plan:
-    """Decks nobody has written to for `seconds`: purged."""
+    """Decks nobody has written to for `seconds`: purged.
+
+    Called by: cli.cmd_clean.
+    """
     cutoff = time.time() - seconds
     groups = top_level(store.objects(""))
     stale = [n for n, objs in groups.items()
@@ -230,6 +281,10 @@ def plan_older_than(store: Store, saver, seconds: float) -> Plan:
 
 
 def plan_everything(store: Store, saver, keep_templates: bool = False) -> Plan:
+    """Every object and every conversation; with keep_templates, kits/ and uploads/ stay.
+
+    Called by: cmd_clean --all.
+    """
     plan = Plan()
     for o in store.objects(""):
         if keep_templates and o.key.split("/", 1)[0] in ("kits", "uploads"):
@@ -244,7 +299,10 @@ def plan_everything(store: Store, saver, keep_templates: bool = False) -> Plan:
 
 def execute(store: Store, saver, plan: Plan) -> dict:
     """Delete what the plan says. Conversations first: a thread with no files is broken, but a
-    file with no thread is merely unreachable, so if this stops halfway the second is better."""
+    file with no thread is merely unreachable, so if this stops halfway the second is better.
+
+    Called by: cli.cmd_clean, tidy_session.
+    """
     for t in plan.threads:
         saver.delete_thread(t)
     gone = store.delete([o.uri for o in plan.objects]) if plan.objects else 0
@@ -253,7 +311,10 @@ def execute(store: Store, saver, plan: Plan) -> dict:
 
 
 def tidy_session(store: Store, saver, deck_id: str) -> dict:
-    """Tidy one deck now. What `tidy_after_turn` calls once a turn has delivered."""
+    """Tidy one deck now. What `tidy_after_turn` calls once a turn has delivered.
+
+    Called by: facade._tidy_if_asked.
+    """
     return execute(store, saver, plan_tidy(store, saver, deck_id))
 
 
@@ -266,6 +327,8 @@ def keep_only_kit(store: Store, template_id: str) -> dict:
 
     Decks already built from a removed kit keep their files and stay editable as decks; what
     they lose is a rebuild from their template (a layout change asks for one), which says so.
+
+    Called by: cli.cmd_kit.
     """
     removed_kits, removed_templates = [], []
     for o in store.objects("kits/"):
@@ -280,7 +343,10 @@ def keep_only_kit(store: Store, template_id: str) -> dict:
 
 
 def parse_age(text: str) -> float:
-    """`7d`, `12h`, `30m` -> seconds."""
+    """`7d`, `12h`, `30m` -> seconds.
+
+    Called by: cli.cmd_clean.
+    """
     units = {"m": 60, "h": 3600, "d": 86400, "w": 604800}
     try:
         return float(text[:-1]) * units[text[-1].lower()]

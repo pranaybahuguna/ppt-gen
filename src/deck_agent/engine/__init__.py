@@ -32,7 +32,12 @@ ENGINE_ROOT = REPO / "engine" / "deckops"
 
 @functools.lru_cache(maxsize=1)
 def bootstrap() -> Path:
-    """Put the engine on the import path. Idempotent; safe to call from anywhere."""
+    """Put the engine on the import path. Idempotent; safe to call from anywhere.
+
+    Called by: engine.build.build_from_kit, engine.build.compile_plan, engine.deck.apply_ops,
+        engine.deck.changelog, engine.deck.check, engine.deck.move_slide,
+        engine.deck.paragraphs, and 24 more.
+    """
     if not (ENGINE_ROOT / "deckops" / "probe.py").exists():
         raise Boundary(
             f"the deckops engine is not at {ENGINE_ROOT}; it is part of this repository - "
@@ -54,6 +59,8 @@ def use_local_fonts() -> list[str]:
     sandbox image into `local/fonts`, and this points the engine at them.
 
     Returns the engine's font directories, for `doctor` to report.
+
+    Called by: bootstrap.
     """
     from deckops import validate as _validate  # noqa: PLC0415  (needs sys.path set first)
 
@@ -64,7 +71,10 @@ def use_local_fonts() -> list[str]:
 
 
 def fonts_available() -> dict:
-    """Which of the metric-compatible families we can actually measure with."""
+    """Which of the metric-compatible families we can actually measure with.
+
+    Called by: cli.cmd_doctor.
+    """
     bootstrap()
     from deckops.validate import FONT_SUBST, _font_file
 
@@ -85,6 +95,8 @@ def guard_deck(path: str | Path) -> None:
 
     Raises `Boundary` with the engine's reason: too large, too many entries, an encrypted or
     path-traversing entry, a suspicious compression ratio, or not a .pptx at all.
+
+    Called by: engine.deck.reseal, nodes.intake.intake.
     """
     bootstrap()
     from deckops.zipguard import UnsafeArchive, check
@@ -97,7 +109,10 @@ def guard_deck(path: str | Path) -> None:
 
 @functools.lru_cache(maxsize=1)
 def engine_version() -> dict:
-    """What built this deck: the repository commit, recorded in every manifest."""
+    """What built this deck: the repository commit, recorded in every manifest.
+
+    Called by: cli.cmd_doctor, nodes.deliver.deliver.
+    """
     bootstrap()
     try:
         sha = subprocess.run(

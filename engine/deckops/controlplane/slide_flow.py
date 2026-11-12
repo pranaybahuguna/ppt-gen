@@ -1,6 +1,7 @@
 """Two-stage deck generation: content first, then layout, one slide at a time.
 
-Stage 1  outline   (one model call)    what each slide says: purpose, title, points, figures, sources.
+Stage 1  outline   (one model call)    what each slide says: purpose, title, points, figures,
+sources.
                                         No layouts, no field names. Plain content.
 Stage 2  render    (one call per slide) the slide's content + only the layouts that can hold it.
                                         The model picks one and fills its fields.
@@ -27,6 +28,7 @@ KIND_HINTS = {"numbers": ["stats"], "sequence": ["steps"], "comparison": ["colum
 
 
 def _text_capacity(p):
+    """How many longer-text fields a pattern without items has."""
     return sum(1 for f in p["fields"] if f.split("_")[0] in LONG_FIELDS or f.rsplit("_", 1)[0] in LONG_FIELDS)
 
 
@@ -77,6 +79,10 @@ def options_for(slide: dict, kit: dict, position: int, total: int) -> list[dict]
 
 
 def max_points(kit: dict) -> int:
+    """The most points any one layout in the kit can hold - the outline's per-slide limit.
+
+    Called by: the agent's nodes.create.outline.
+    """
     caps = [p["items"].get("max", len(p["items"]["groups"])) for p in kit["patterns"].values() if "items" in p]
     return max(caps + [_text_capacity(p) for p in kit["patterns"].values() if "items" not in p] + [1])
 
@@ -109,6 +115,10 @@ def expand(outline: dict, kit: dict) -> list[dict]:
 
 
 def check_slide(plan_slide: dict, index: dict, kit: dict, content: dict) -> list[str]:
+    """Compile one placed slide on its own; -> the compile errors, phrased for this slide.
+
+    Called by: render_one, after every model answer.
+    """
     try:
         compile_from_kit({"slides": [plan_slide]}, index, kit, content)
         return []
@@ -117,7 +127,9 @@ def check_slide(plan_slide: dict, index: dict, kit: dict, content: dict) -> list
 
 
 def render_one(planner, job, context, index, kit, content, retries=2, feedback=None, previous=None, log=print):
-    """Ask the model for one slide; on a compile error, send the error back. -> (plan_slide, attempts)"""
+    """Ask the model for one slide; on a compile error, send the error back. -> (plan_slide,
+    attempts)
+    """
     attempts = []
     if not job["options"]:
         return None, [{"error": ["no layout in this template can hold this slide's content"]}]
@@ -138,6 +150,7 @@ def plan_slides(outline, kit, index, content, planner, retries=2, log=print, wor
     total = len(jobs)
 
     def work(i):
+        """Place slide i."""
         ctx = {"deck_title": outline.get("title", ""), "slide": i + 1, "of": total}
         return render_one(planner, jobs[i], ctx, index, kit, content, retries, log=log)
 

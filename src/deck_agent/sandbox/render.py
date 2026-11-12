@@ -28,6 +28,10 @@ from .docker import ContainerResult, SandboxUnavailable, run_container
 
 @dataclass
 class RenderResult:
+    """What rendering produced: which backend, the PNG previews and PDF, or why it was skipped.
+
+    Returned by: render(); read by make_previews, the kit builder and the vision checks.
+    """
     backend: str
     previews: list[Path] = field(default_factory=list)
     pdf: Path | None = None
@@ -36,12 +40,17 @@ class RenderResult:
 
     @property
     def ok(self) -> bool:
+        """True when previews were produced."""
         return self.skipped is None
 
 
 def render(pptx: str | Path, outdir: str | Path, pages: list[int] | None = None,
            dpi: int = 60, s: Settings | None = None) -> RenderResult:
-    """Render `pages` (0-based slide indices; None = all) as PNGs into `outdir`."""
+    """Render `pages` (0-based slide indices; None = all) as PNGs into `outdir`.
+
+    Called by: cli.cmd_kit, engine.kitbuild._vision_compare, nodes.common.make_previews,
+        nodes.edit._look_at_one, nodes.kit.ensure_kit; tests/validate_real_model.py.
+    """
     s = s or settings()
     pptx, outdir = Path(pptx).resolve(), Path(outdir).resolve()
     outdir.mkdir(parents=True, exist_ok=True)
@@ -63,6 +72,10 @@ def render(pptx: str | Path, outdir: str | Path, pages: list[int] | None = None,
 
 
 def _render_local(pptx: Path, outdir: Path, pages: list[int], dpi: int) -> RenderResult:
+    """Render with a LibreOffice installed on this machine, through the engine's own renderer.
+
+    Called by: render(), when render_backend is 'local'.
+    """
     from ..engine import bootstrap
 
     bootstrap()
@@ -84,7 +97,10 @@ def _render_local(pptx: Path, outdir: Path, pages: list[int], dpi: int) -> Rende
 
 
 def _render_docker(pptx: Path, outdir: Path, pages: list[int], dpi: int, s: Settings) -> RenderResult:
-    """One container, `--network none`, the deck copied in and the PNGs copied out."""
+    """One container, `--network none`, the deck copied in and the PNGs copied out.
+
+    Called by: render.
+    """
     import tempfile
 
     with tempfile.TemporaryDirectory(dir=s.workspace_root, prefix="render-") as tmp:

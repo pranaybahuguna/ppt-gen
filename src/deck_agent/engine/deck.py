@@ -29,7 +29,12 @@ EXPECT_FIELD = "text_sha"
 # --------------------------------------------------------------------------- read
 
 def probe(path: str | Path) -> dict:
-    """Deck -> index.json. Every box with its id, geometry, font size, text and fingerprint."""
+    """Deck -> index.json. Every box with its id, geometry, font size, text and fingerprint.
+
+    Called by: engine.build.build_from_kit, engine.kitbuild.draft, nodes.create.assemble,
+        nodes.create.render_slides, nodes.create.repair, nodes.custom_code.custom_code,
+        nodes.edit._change_layouts, and 10 more; tests/validate_real_model.py.
+    """
     bootstrap()
     from deckops.probe import probe as _probe
 
@@ -37,7 +42,10 @@ def probe(path: str | Path) -> dict:
 
 
 def paragraphs(index: dict, slide_indices: set[int] | None = None) -> list[dict]:
-    """The paragraphs of some slides, each with its ref, text, fingerprint and tagged runs."""
+    """The paragraphs of some slides, each with its ref, text, fingerprint and tagged runs.
+
+    Called by: changelog, nodes.translate.translate_plan, nodes.translate.translate_repair.
+    """
     bootstrap()
     from deckops.probe import iter_paragraphs
 
@@ -45,6 +53,10 @@ def paragraphs(index: dict, slide_indices: set[int] | None = None) -> list[dict]
 
 
 def slide_refs(index: dict) -> list[str]:
+    """Every slide's address (`slide:<id>`), in deck order.
+
+    Called by: engine.edits.compile_edit, to check that an action names a slide that exists.
+    """
     return [s["ref"] for s in index["slides"]]
 
 
@@ -56,6 +68,9 @@ def apply_ops(src: str | Path, ops: list[dict], dst: str | Path) -> dict:
     Raises `Refused` with the engine's reasons - that is the engine protecting the deck
     (usually a fingerprint that no longer matches, i.e. the deck moved under us), so the
     answer is to re-probe and re-plan, never to force it.
+
+    Called by: engine.build.build_from_kit, nodes.edit._change_layouts,
+        nodes.edit._insert_slides, nodes.edit.edit_apply, nodes.translate.translate_apply.
     """
     bootstrap()
     from pydantic import ValidationError
@@ -81,6 +96,10 @@ def check(path: str | Path, slide_indices: set[int] | None = None) -> dict:
     """Predicted overflow, text overlap and structural problems. No rendering, no subprocess.
 
     -> {"findings": [...], "structural": [...]}
+
+    Called by: engine.build.build_from_kit, Baseline.of, nodes.custom_code.custom_code,
+        nodes.edit._change_layouts, nodes.edit._insert_slides, nodes.edit.edit_apply,
+        nodes.translate.translate_apply; tests/validate_real_model.py.
     """
     bootstrap()
     from deckops.validate import validate
@@ -109,6 +128,11 @@ class Baseline:
 
     @classmethod
     def of(cls, path: str | Path, slide_indices: set[int] | None = None) -> "Baseline":
+        """Run the checks on a deck (or some of its slides) and remember what they found.
+
+        Called by: baseline_for_kit (the template's example slides), edit_apply and translate_apply
+        (the deck before the change).
+        """
         rep = check(path, slide_indices)
         return cls(
             overflow={(f["slide_index"], _shape_id(f["ref"])): f["ratio"]
@@ -119,6 +143,11 @@ class Baseline:
         )
 
     def keep(self, finding: dict, slide_of=lambda f: f["slide_index"]) -> bool:
+        """Whether a finding is ours rather than the baseline's: a new overlap, or overflow worse
+        than what the baseline already had (by more than the predictor's tolerance).
+
+        Called by: Baseline.filter.
+        """
         base_slide = slide_of(finding)
         if finding["kind"] == "overlap":
             return (base_slide, tuple(finding["shapes"])) not in self.overlaps
@@ -142,6 +171,9 @@ def preserved_count(stats: dict) -> int:
 
     The engine reports this two ways - `execute()` gives a count, `save_preserving()` gives the
     list of part names - so callers go through here rather than guessing.
+
+    Called by: engine.build.BuildResult.summary, nodes.custom_code.custom_code,
+        nodes.edit.edit_apply, nodes.translate.translate_apply; tests/validate_real_model.py.
     """
     value = (stats or {}).get("parts", stats or {}).get("preserved")
     if isinstance(value, int):
@@ -150,7 +182,10 @@ def preserved_count(stats: dict) -> int:
 
 
 def _shape_id(ref: str) -> str:
-    """'slide:256/shape:9/para:0' -> '9'."""
+    """'slide:256/shape:9/para:0' -> '9'.
+
+    Called by: Baseline.keep, Baseline.of.
+    """
     return ref.rsplit("shape:", 1)[-1].split("/")[0]
 
 
@@ -172,6 +207,8 @@ def changelog(index: dict, ops: list[dict]) -> list[dict]:
 
     Text edits are shown before/after; everything else gets a one-line summary. The engine
     stores text as tagged runs (`<r0>Bonjour</r0>`), so tags are stripped for display.
+
+    Called by: nodes.edit.edit_apply, nodes.translate.translate_apply.
     """
     bootstrap()
     from deckops.refs import parse_tagged
@@ -199,7 +236,10 @@ def changelog(index: dict, ops: list[dict]) -> list[dict]:
 
 
 def _plain(tokens) -> str:
-    """Tagged runs -> the text a reader sees."""
+    """Tagged runs -> the text a reader sees.
+
+    Called by: changelog.
+    """
     parts = []
     for t in tokens:
         if t[0] == "r":
@@ -227,6 +267,9 @@ def reseal(src: str | Path, produced: str | Path, dst: str | Path) -> dict:
     of the deck is the file we started with, byte for byte.
 
     -> {"preserved": n, "changed": [...], "added": [...], "removed": [...]}
+
+    Called by: nodes.custom_code.custom_code, nodes.edit._replay_code_slides;
+        tests/validate_real_model.py.
     """
     bootstrap()
     from pptx import Presentation
@@ -247,6 +290,9 @@ def new_slide_index(before: dict, after: dict) -> int | None:
     appended produced a genuinely scrambled deck once: the code had inserted its slide in the
     middle, and the host then moved a different slide - an existing one - to the target
     position. Identity is the only safe way to find it.
+
+    Called by: nodes.custom_code.custom_code, nodes.edit._change_layouts,
+        nodes.edit._replay_code_slides.
     """
     known = {s["ref"] for s in before["slides"]}
     for i, slide in enumerate(after["slides"]):
@@ -265,6 +311,9 @@ def move_slide(src: str | Path, frm: int, to: int, dst: str | Path) -> dict:
     saved through the engine's part-by-part comparison so every slide's own XML is untouched.
 
     Both indices are 0-based positions in the current order.
+
+    Called by: nodes.custom_code.custom_code, nodes.edit._change_layouts,
+        nodes.edit._insert_slides, nodes.edit._replay_code_slides.
     """
     bootstrap()
     from pptx import Presentation

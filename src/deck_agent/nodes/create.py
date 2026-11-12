@@ -43,7 +43,18 @@ NO_FIT = "no layout in this template can hold this slide's content"
 # --------------------------------------------------------------------------- stage 1
 
 def outline(state: DeckState, planner=None, log=print) -> dict:
-    """What the deck says, slide by slide. One call, no layouts."""
+    """Stage 1: write what each slide says (one model call), with no layouts yet.
+
+    Graph node. Runs: on the create route, after ensure_kit. Skipped when the caller passed an
+        outline.
+    Reads: instruction, content_pack, kit (for the most points any layout holds), outline.
+    Writes: outline (published as outline.json); route='decline' with errors when there is no
+        model.
+    Next: graph.after_outline -> approve_outline | ask | decline.
+    Called by: LangGraph, registered in graph.build_graph.
+
+    What the deck says, slide by slide. One call, no layouts.
+    """
     bootstrap()
     from controlplane import slide_flow
 
@@ -69,7 +80,16 @@ def outline(state: DeckState, planner=None, log=print) -> dict:
 
 
 def approve_outline(state: DeckState) -> dict:
-    """Optionally stop and let a person read the outline before a deck is built from it.
+    """Optionally stop and let a person approve the outline before anything is built.
+
+    Graph node. Runs: on the create route, after outline. Only stops when
+        settings.approve_outline is on.
+    Reads: approved, outline, route.
+    Writes: approved; route='decline' if the person said no.
+    Next: after_approval -> render_slides | decline.
+    Called by: LangGraph, registered in graph.build_graph.
+
+    Optionally stop and let a person read the outline before a deck is built from it.
 
     Off by default. It exists because reviewing eight lines of content is seconds of a person's
     time, while reviewing a finished deck is minutes - and because this is the one point in the
@@ -89,13 +109,31 @@ def approve_outline(state: DeckState) -> dict:
 
 
 def after_approval(state: DeckState) -> str:
+    """Decision after approve_outline: build if approved (or approval was not required), otherwise
+    decline.
+
+    Called by: LangGraph, as the conditional edge out of approve_outline (graph.build_graph).
+    """
     return "render_slides" if (state.get("approved") or {}).get("outline", True) else "decline"
 
 
 # --------------------------------------------------------------------------- stage 2
 
 def render_slides(state: DeckState, planner=None, log=print) -> dict:
-    """One call per slide: content plus the layouts that fit. Failures are classified."""
+    """Stage 2: place every slide into one of the template's layouts (one model call per slide, in
+    parallel), then apply the layout budget.
+
+    Graph node. Runs: on the create route, after approve_outline.
+    Reads: outline, kit, template, content_pack.
+    Writes: plan (one entry per placed slide), plan_jobs (which outline slide each plan slide
+        holds), pending_code (slides to rework into diagrams, and slides no layout holds);
+        errors for slides that failed; route='decline' when nothing could be placed. Publishes
+        render_attempts.json.
+    Next: after_render -> assemble | custom_code | decline.
+    Called by: LangGraph, registered in graph.build_graph.
+
+    One call per slide: content plus the layouts that fit. Failures are classified.
+    """
     bootstrap()
     from controlplane import slide_flow
 
@@ -124,6 +162,8 @@ def render_slides(state: DeckState, planner=None, log=print) -> dict:
                 log(f"  slide {i + 1}: no layout fits it strictly; {relaxed}")
 
         def one(i: int):
+            """Place slide i (one model call, with retries). Run four at a time in a thread pool.
+            """
             ctx = {"deck_title": outline_doc.get("title", ""), "slide": i + 1, "of": total}
             return slide_flow.render_one(planner, jobs[i], ctx, index, kit, content,
                                          s.render_retries, log=log)
@@ -226,6 +266,11 @@ def render_slides(state: DeckState, planner=None, log=print) -> dict:
 
 
 def after_render(state: DeckState) -> str:
+    """Decision after render_slides: assemble when any slide was placed, straight to custom_code
+    when none was, decline if render_slides declined.
+
+    Called by: LangGraph, as the conditional edge out of render_slides (graph.build_graph).
+    """
     if state.get("route") == "decline":
         return "decline"
     return "assemble" if (state.get("plan") or {}).get("slides") else "custom_code"
@@ -234,7 +279,21 @@ def after_render(state: DeckState) -> str:
 # --------------------------------------------------------------------------- build
 
 def assemble(state: DeckState, log=print) -> dict:
-    """Compile the plan, build the deck, check it. The deterministic heart of the create route."""
+    """Build the deck from the plan with the engine (no model), check it, publish a version, render
+    previews.
+
+    Graph node. Runs: on the create route after render_slides, and again after every repair.
+        When code_slides exist (a rebuild after slides were reworked), their kept code is run
+        again so they survive.
+    Reads: plan, kit, template, content_pack, code_slides.
+    Writes: deck_versions (+1), deck_plan, findings, structural, leaked, previews, changelog;
+        route='decline' with errors when the plan does not compile. Publishes plan.json and
+        ops.json.
+    Next: look, then graph.after_look -> after_assemble.
+    Called by: LangGraph, registered in graph.build_graph.
+
+    Compile the plan, build the deck, check it. The deterministic heart of the create route.
+    """
     with workspace(state) as ws:
         template = ws.fetch(state["template"], "template.pptx")
         kit = store().get_json(state["kit"])
@@ -288,6 +347,10 @@ def assemble(state: DeckState, log=print) -> dict:
 
 
 def _counts(plan: dict) -> dict:
+    """How many slides use each layout - for the changelog.
+
+    Called by: assemble.
+    """
     out: dict[str, int] = {}
     for s in plan.get("slides", []):
         out[s.get("pattern", "?")] = out.get(s.get("pattern", "?"), 0) + 1
@@ -297,7 +360,17 @@ def _counts(plan: dict) -> dict:
 # --------------------------------------------------------------------------- repair
 
 def repair(state: DeckState, planner=None, log=print) -> dict:
-    """Send the slides that did not fit back to the model, with a length it can aim at.
+    """Send the slides with findings back to the model with a precise target, and update the plan.
+
+    Graph node. Runs: on the create route, when after_assemble finds problems and repair rounds
+        are left (settings.max_repair_rounds).
+    Reads: findings, plan, plan_jobs, outline, kit, template, content_pack, deck_versions,
+        pending_code (reworks do not use up a layout's budget), repair_round.
+    Writes: plan, repair_round. Publishes repair-N.json.
+    Next: assemble.
+    Called by: LangGraph, registered in graph.build_graph.
+
+    Send the slides that did not fit back to the model, with a length it can aim at.
 
     Only the offending slides are re-rendered, and only they change in the plan. The previous
     answer and the exact complaint go with the request, which is what turns a vague "too long"
@@ -362,7 +435,13 @@ def repair(state: DeckState, planner=None, log=print) -> dict:
 
 
 def after_assemble(state: DeckState) -> str:
-    """Clean -> hand it over. Problems -> repair, then the escape hatch, then say so honestly."""
+    """Decision after a create build has been looked at: repair first while rounds are left, then
+    custom_code for slides owed (reworks, no-fit), then deliver.
+
+    Called by: graph.after_look on the create route.
+
+    Clean -> hand it over. Problems -> repair, then the escape hatch, then say so honestly.
+    """
     s = settings()
     # Repair the template slides first, then draw the designed ones. In the other order a
     # repair rebuilds the deck from its plan - which has no designed slides in it - and they

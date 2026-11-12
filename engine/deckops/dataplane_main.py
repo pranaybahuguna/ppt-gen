@@ -17,11 +17,17 @@ import traceback
 
 
 def _dump(path, obj):
+    """Write a JSON report file."""
     with open(path, "w") as f:
         json.dump(obj, f, indent=1, ensure_ascii=False)
 
 
 def main(argv):
+    """The engine's data-plane entry point: probe, execute or validate one deck, writing a JSON
+    report, run as a separate restricted process by controlplane.sandbox.
+
+    Not used by the agent, which runs the same engine functions in-process.
+    """
     from deckops import zipguard
     cmd = argv[0]
     try:

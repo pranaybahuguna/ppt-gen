@@ -12,12 +12,18 @@ from .refs import TagError, parse_tagged
 
 
 class CompileError(ValueError):
+    """A plan that cannot be compiled; args[0] is the list of problems, phrased for a model."""
     pass
 
 
 # ---- translate --------------------------------------------------------------
 
 def compile_translate(plan: dict, index: dict) -> list[dict]:
+    """Compile a translation plan (new text per paragraph ref) into set_paragraph_text operations,
+    each carrying the paragraph's fingerprint. Raises CompileError for unknown refs.
+
+    Called by: the agent's nodes.translate (translate_plan / translate_apply).
+    """
     paras = {p["ref"]: p for p in iter_paragraphs(index)}
     ops, errors = [], []
     for item in plan["paragraphs"]:
@@ -69,10 +75,18 @@ NAME_HINTS = {"section": "section", "title_and_body": "content", "title": "title
 
 
 def _content_roles(layout):
+    """A layout's placeholders that hold content (not date, footer or slide number)."""
     return [ph for ph in layout["placeholders"] if ph["role"] != "chrome"]
 
 
 def pick_layout(family: str, catalog: list[dict], family_map: dict | None = None) -> dict:
+    """The slide layout for a layout family (title, title+body, two columns, ...), by its
+    placeholders' roles.
+
+    Called by: compile_create - the engine's older, layout-based create path. Not used by the
+    agent,
+    which builds from a kit instead.
+    """
     if family_map and family in family_map:
         return next(l for l in catalog if l["id"] == family_map[family])
     want = Counter(FAMILIES[family])
@@ -85,6 +99,11 @@ def pick_layout(family: str, catalog: list[dict], family_map: dict | None = None
 
 
 def compile_create(plan: dict, catalog: list[dict], family_map: dict | None = None) -> list[dict]:
+    """Compile a layout-family plan into add_slide and set-text operations.
+
+    Called by: the engine's standalone orchestrator and its tests. Not used by the agent, which
+    builds from a kit (patterns.compile_from_kit).
+    """
     ops, errors = [], []
     for n, s in enumerate(plan["slides"]):
         fam = s["layout_family"]
@@ -114,6 +133,11 @@ def compile_create(plan: dict, catalog: list[dict], family_map: dict | None = No
 # every coordinate.
 
 def detect_cards(slide: dict) -> list[dict]:
+    """Find a numbered card grid on a slide: each number with the heading and body beside it.
+
+    Called by: compile_card_grid; the agent's engine.edits (deck_view flags slides that have one,
+    so relayout_cards can be offered).
+    """
     shapes = [s for s in slide["shapes"] if s.get("geom")]
     text = lambda s: "".join(p["text"] for p in s.get("paras", [])).strip()
     used, cards = set(), []
@@ -135,6 +159,7 @@ def detect_cards(slide: dict) -> list[dict]:
 
 
 def _set_text(shape: dict, text: str) -> dict:
+    """A set_paragraph_text op for a shape's first paragraph, keeping run 0's formatting."""
     p = shape["paras"][0]
     # single-run paragraphs keep their formatting by writing into run 0
     return {"op": "set_paragraph_text", "target": p["ref"], "expect": {"text_sha": p["sha"]},
@@ -142,6 +167,7 @@ def _set_text(shape: dict, text: str) -> dict:
 
 
 def _esc(t):
+    """Escape text for the tagged-run format."""
     import html
     return html.escape(t, quote=False)
 
@@ -205,6 +231,7 @@ def compile_card_grid(plan: dict, index: dict) -> list[dict]:
 
 
 def _noop(op, index):
+    """Whether an operation would leave the paragraph as it already is."""
     from .probe import iter_paragraphs
     p = next(p for p in iter_paragraphs(index) if p["ref"] == op["target"])
     return p["tagged"] == op["value"]

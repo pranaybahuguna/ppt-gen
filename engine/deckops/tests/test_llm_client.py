@@ -1,4 +1,5 @@
-"""The real model client (HTTP, JSON mode) against a local fake server: request shape and parsing."""
+"""The real model client (HTTP, JSON mode) against a local fake server: request shape and parsing.
+"""
 import json
 import os
 import sys

@@ -35,10 +35,18 @@ TOOL_PATH = ":".join(["/usr/local/bin", "/usr/bin", "/bin", "/opt/homebrew/bin",
 
 
 class SandboxError(Exception):
+    """The standalone engine's data-plane process could not be started or failed."""
     pass
 
 
 def run(args: list[str], workspace: str, report_path: str, timeout=240, mem_mb=4096, cpu_s=180):
+    """Run the engine's data-plane entry point (dataplane_main.py) in a separate, resource-limited
+    process, for the standalone engine.
+
+    Called by: orchestrator. Not used by the agent: it runs the engine in-process and keeps one
+    container,
+    for rendering and model-written code (deck_agent.sandbox).
+    """
     workspace = os.path.abspath(workspace)
     home = os.path.join(workspace, ".home")
     os.makedirs(home, exist_ok=True)
@@ -51,6 +59,7 @@ def run(args: list[str], workspace: str, report_path: str, timeout=240, mem_mb=4
         cmd = [sbx, "-p", MAC_PROFILE, *py]
 
         def limits():
+            """Resource limits applied in the child process before the data plane starts."""
             resource.setrlimit(resource.RLIMIT_CPU, (cpu_s, cpu_s))
             resource.setrlimit(resource.RLIMIT_FSIZE, (512 * 1024 * 1024,) * 2)
             resource.setrlimit(resource.RLIMIT_NOFILE, (512, 512))

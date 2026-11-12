@@ -34,6 +34,11 @@ from .docker import SandboxUnavailable, run_container
 
 @dataclass
 class CodeResult:
+    """The outcome of running model-written code: the deck it produced, or the error and the
+    problems phrased for the model; whether the static check refused it; slide counts.
+
+    Returned by: run_builder; read by custom_code and the code-slide replay.
+    """
     ok: bool
     deck: Path | None = None
     error: str | None = None
@@ -108,7 +113,11 @@ Rules:
 
 def run_builder(code: str, ctx: dict, deck: str | Path | None = None,
                 s: Settings | None = None) -> CodeResult:
-    """Run `code`'s `build(prs, ctx)` against `deck` (or a blank deck). -> CodeResult."""
+    """Run `code`'s `build(prs, ctx)` against `deck` (or a blank deck). -> CodeResult.
+
+    Called by: nodes.custom_code.custom_code, nodes.edit._replay_code_slides;
+        tests/validate_real_model.py.
+    """
     s = s or settings()
 
     verdict = guard.inspect(code)

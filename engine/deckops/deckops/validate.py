@@ -33,6 +33,11 @@ EMU_PER_PT = 12700
 
 
 def _font_file(name: str, bold: bool):
+    """The TrueType file for a font name and weight, with metric-compatible substitutes
+    (Calibri -> Carlito, Arial -> Liberation Sans) searched in the font directories.
+
+    Called by: predict_overflow, to measure text with the real letter widths.
+    """
     fam = FONT_SUBST.get(name.lower(), name).replace(" ", "")
     style = "Bold" if bold else "Regular"
     for d in FONT_DIRS:
@@ -49,6 +54,7 @@ def _font_file(name: str, bold: bool):
 
 
 def _theme_fonts(prs):
+    """The theme's heading and body fonts (major, minor), for text that does not name its own."""
     theme = etree.fromstring(prs.slide_master.part.part_related_by(RT.THEME).blob)
     ns = {"a": "http://schemas.openxmlformats.org/drawingml/2006/main"}
     major = theme.xpath("//a:majorFont/a:latin/@typeface", namespaces=ns)
@@ -57,6 +63,7 @@ def _theme_fonts(prs):
 
 
 def _style_sz(txBody_or_style, lvl):
+    """The default font size for a paragraph level in a list style, or None."""
     if txBody_or_style is None:
         return None
     d = txBody_or_style.find(f".//{qn(f'a:lvl{lvl}pPr')}/{qn('a:defRPr')}")
@@ -66,6 +73,11 @@ def _style_sz(txBody_or_style, lvl):
 
 
 def _effective_size(run, para, shape, master):
+    """The font size a run really has: its own, else its paragraph's level default, else the
+    shape's, the layout's and the master's - the inheritance PowerPoint applies.
+
+    Called by: predict_overflow.
+    """
     rPr = run.find(qn("a:rPr"))
     if rPr is not None and rPr.get("sz"):
         return int(rPr.get("sz")) / 100
@@ -88,6 +100,10 @@ def _effective_size(run, para, shape, master):
 
 
 def _wrap_lines(text, font, width):
+    """How many lines a text takes in a width at a font, wrapping on spaces like a renderer.
+
+    Called by: predict_overflow.
+    """
     lines = 0
     for hard in text.split("\n"):
         words, cur = hard.split(" "), ""
@@ -124,6 +140,12 @@ def _slide_box(shape):
 
 
 def predict_overflow(prs, slide, shape, major, minor):
+    """Measure whether a shape's text fits its box: lines at the real font and size, times line
+    height, against the box drawn on the slide (groups' scaling applied). -> needed and available
+    height, ratio, overflow, and a font size that would fit.
+
+    Called by: validate, for every text shape.
+    """
     tf = shape.text_frame
     bodyPr = tf._txBody.find(qn("a:bodyPr"))
     ins = {k: int(bodyPr.get(k, d)) / EMU_PER_PT for k, d in
@@ -196,6 +218,11 @@ def find_overlaps(slide, min_share=0.15):
 
 
 def structural_checks(path):
+    """Problems that would make PowerPoint refuse or repair the file: parts with no content type,
+    duplicate shape ids on a slide.
+
+    Called by: validate.
+    """
     problems = []
     with zipfile.ZipFile(path) as z:
         names = z.namelist()
@@ -218,6 +245,11 @@ def structural_checks(path):
 
 
 def render(path, outdir, pages=None, dpi=60):
+    """Render a deck to PDF with a local LibreOffice, then chosen pages to PNG with pdftoppm.
+
+    Called by: the agent's render_backend='local' (sandbox.render._render_local); the sandbox image
+    has its own copy (runner/render.py).
+    """
     os.makedirs(outdir, exist_ok=True)
     soffice = shutil.which("soffice") or "/Applications/LibreOffice.app/Contents/MacOS/soffice"
     subprocess.run([soffice, "--headless", "--norestore", "--convert-to", "pdf", "--outdir", outdir, path],
@@ -233,6 +265,11 @@ def render(path, outdir, pages=None, dpi=60):
 
 
 def validate(path, slide_indices, outdir, do_render=True):
+    """Run the checks on a deck (or some slides): overflow and overlap per slide, structural
+    problems for the file, and optionally render previews. -> {findings, structural[, previews]}
+
+    Called by: the agent's engine.deck.check (with do_render=False) after every build and edit.
+    """
     prs = Presentation(path)
     major, minor = _theme_fonts(prs)
     findings = []
