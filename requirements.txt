@@ -4,6 +4,10 @@ langgraph-checkpoint-postgres==3.2.0
 psycopg[binary,pool]==3.3.8
 boto3==1.44.0
 
+# --- the decks and jobs tables: SQLAlchemy (async) on Postgres through asyncpg ---
+SQLAlchemy[asyncio]==2.1.8
+asyncpg==0.32.0
+
 # --- reading and writing decks (the engine in engine/deckops runs in this process) ---
 pydantic>=2.6
 python-pptx==1.0.2

@@ -28,6 +28,12 @@ def pytest_configure(config):
     config.addinivalue_line("markers", "integration: needs docker, Postgres or object storage")
 
 
+@pytest.fixture
+def anyio_backend():
+    """Async tests (`@pytest.mark.anyio`) run on asyncio, the loop the server uses."""
+    return "asyncio"
+
+
 @pytest.fixture(scope="session")
 def samples() -> Path:
     """The engine's own sample deck and example template, built if they are not there yet."""
@@ -76,8 +82,14 @@ def offline_settings(tmp_path):
         llm_client="stub",
         local_root=str(tmp_path),
         allow_custom_code=False,
+        # the decks and jobs tables: SQLite in a file of this test's own - same models, same
+        # queries, no Postgres needed
+        db_url=f"sqlite+aiosqlite:///{tmp_path}/deckops.db",
     )
     settings_module.reset(s)
+    from deck_agent.db import engine as db_engine
+
+    db_engine.reset()
     storage.reset(storage.MemoryStore(s.s3_bucket))
     checkpointer.reset_memory()
     yield s

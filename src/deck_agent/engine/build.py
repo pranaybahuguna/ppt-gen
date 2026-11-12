@@ -24,7 +24,8 @@ from .deck import Baseline, check, preserved_count, probe
 
 @dataclass
 class BuildResult:
-    """What building a deck from a plan produced: the file, the operations, and what the checks found.
+    """What building a deck from a plan produced: the file, the operations, and what the checks
+    found.
 
     Returned by: build_from_kit; read by assemble and the edit route's rebuild.
     """

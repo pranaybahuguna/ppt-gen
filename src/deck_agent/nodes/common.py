@@ -44,12 +44,23 @@ def workspace(state: DeckState, keep: bool | None = None):
 
 
 
+def version_number(uri: str | None) -> int | None:
+    """The number in a version's file name: `.../v003.pptx` -> 3; None for anything else."""
+    m = re.search(r"/v(\d+)\.pptx$", uri or "")
+    return int(m.group(1)) if m else None
+
+
 def next_version_name(state: DeckState) -> str:
-    """The file name the next deck version gets: v001.pptx, v002.pptx, ...
+    """The file name the next deck version gets: one more than the newest, v001.pptx, v002.pptx ...
+
+    Numbered from the newest version, not by counting them: with keep_versions, older versions
+    are deleted, and counting would hand out a name that is still in use.
 
     Called by: publish_version.
     """
-    return f"v{len(state.get('deck_versions') or []) + 1:03d}.pptx"
+    versions = state.get("deck_versions") or []
+    newest = version_number(versions[-1]) if versions else 0
+    return f"v{(newest if newest is not None else len(versions)) + 1:03d}.pptx"
 
 
 def publish_version(state: DeckState, ws: Workspace, local_name: str) -> tuple[str, list[str]]:

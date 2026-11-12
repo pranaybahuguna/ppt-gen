@@ -57,6 +57,39 @@ def _upload_if_local(path_or_uri: str | None) -> str | None:
     return store().put(local, f"uploads/{sha256_file(local)}-{local.name}")
 
 
+def recorded(kind: str, deck_id: str | None, request: dict, call, *, title: str | None = None,
+             template: str | None = None) -> dict:
+    """Run `call()` recorded as a job in the database, as the server does: a row 'queued' and
+    'running' before, 'done' or 'failed' with the summary after, and the deck's row updated.
+
+    If the database cannot be reached the work still runs, and a line on stderr says it was
+    not recorded.
+
+    Called by: the commands that change a deck or ingest a template.
+    """
+    from .db import repo
+    from .db.engine import run
+    from .summary import describe
+
+    try:
+        job_id = run(lambda: repo.start_job(kind, deck_id, request, title=title, template=template))
+        run(lambda: repo.mark_running(job_id))
+    except Exception as e:                               # noqa: BLE001
+        print(f"(not recorded in the database: {e.__class__.__name__}: {e})", file=sys.stderr)
+        return call()
+    try:
+        result = call()
+    except Exception as e:
+        err = f"{e.__class__.__name__}: {e}"
+        run(lambda: repo.finish_job(job_id, ok=False, error=err))
+        raise
+    summary = describe(result, deck_id)["summary"] if deck_id else []
+    ok = bool(result.get("ok")) or bool(result.get("question"))
+    run(lambda: repo.finish_job(job_id, ok=ok, summary=summary, deck_file=result.get("deck"),
+                                error=None if ok else result.get("reason")))
+    return result
+
+
 # --------------------------------------------------------------------------- commands
 
 def cmd_doctor(args) -> int:
@@ -100,6 +133,17 @@ def cmd_doctor(args) -> int:
         out["object_storage"] = {"ok": False, "error": str(e)}
 
     try:
+        from .db import repo
+        from .db.engine import run, url
+
+        run(lambda: repo.list_jobs(limit=1))
+        out["database"] = {"ok": True, "url": url().split("@")[-1]}
+    except Exception as e:
+        problems.append(f"database (decks and jobs tables): {e.__class__.__name__}: {e}. "
+                        "Run: make up && make init")
+        out["database"] = {"ok": False, "error": str(e)[:200]}
+
+    try:
         from .infra.checkpointer import checkpointer
 
         with checkpointer(s) as saver:
@@ -121,13 +165,17 @@ def cmd_doctor(args) -> int:
 
 
 def cmd_init(args) -> int:
-    """`deckops init`: create the checkpoint tables in Postgres and the bucket in S3. Idempotent.
+    """`deckops init`: create the checkpoint tables, the decks and jobs tables, and the bucket.
+    Idempotent.
 
     Called by: main(); `make init`, once after `make up`.
     """
+    from .db.engine import ready, run, url
     from .infra.checkpointer import migrate
 
     print(migrate())
+    run(ready)
+    print(f"decks and jobs tables ready in {url().split('@')[-1]}")
     st = store()
     st.ensure_bucket()
     print(f"bucket ready: {st.bucket}")
@@ -173,7 +221,9 @@ def cmd_kit(args) -> int:
     from .templates import ingest
 
     try:
-        result = ingest(args.template, args.out, args.make_default)
+        result = recorded("ingest", None, {"file": str(args.template),
+                                           "make_default": args.make_default},
+                          lambda: ingest(args.template, args.out, args.make_default))
     except FileNotFoundError as e:
         sys.exit(str(e))
     _p(result)
@@ -195,8 +245,11 @@ def cmd_create(args) -> int:
     outline = json.loads(Path(args.outline).read_text()) if args.outline else None
     extra = {"outline": outline} if outline else {}
     context = [_upload_if_local(c) for c in args.context or []]
-    result = facade.create_deck(args.id, args.brief, content,
-                                _upload_if_local(args.template), context=context, **extra)
+    template = _upload_if_local(args.template)
+    result = recorded("create", args.id, {"brief": args.brief, "context": context},
+                      lambda: facade.create_deck(args.id, args.brief, content, template,
+                                                 context=context, **extra),
+                      title=args.brief[:80], template=template)
     _p(result)
     return 0 if result.get("ok") else 1
 
@@ -206,7 +259,8 @@ def cmd_edit(args) -> int:
 
     Called by: main(), when that subcommand is given. Returns the process exit code.
     """
-    result = facade.edit_deck(args.id, args.instruction)
+    result = recorded("edit", args.id, {"instruction": args.instruction},
+                      lambda: facade.edit_deck(args.id, args.instruction))
     _p(result)
     return 0 if result.get("ok") else 1
 
@@ -217,7 +271,8 @@ def cmd_translate(args) -> int:
     Called by: main(), when that subcommand is given. Returns the process exit code.
     """
     slides = [int(x) for x in args.slides.split(",")] if args.slides else None
-    result = facade.translate_deck(args.id, args.lang, slides)
+    result = recorded("translate", args.id, {"lang": args.lang, "slides": slides},
+                      lambda: facade.translate_deck(args.id, args.lang, slides))
     _p(result)
     return 0 if result.get("ok") else 1
 
@@ -227,7 +282,8 @@ def cmd_ask(args) -> int:
 
     Called by: main(), when that subcommand is given. Returns the process exit code.
     """
-    result = facade.ask_deck(args.id, args.instruction)
+    result = recorded("ask", args.id, {"instruction": args.instruction},
+                      lambda: facade.ask_deck(args.id, args.instruction))
     _p(result)
     return 0 if result.get("ok") else 1
 
@@ -237,7 +293,8 @@ def cmd_answer(args) -> int:
 
     Called by: main(), when that subcommand is given. Returns the process exit code.
     """
-    result = facade.answer(args.id, args.text)
+    result = recorded("answer", args.id, {"text": args.text},
+                      lambda: facade.answer(args.id, args.text))
     _p(result)
     return 0 if result.get("ok") else 1
 
@@ -248,8 +305,9 @@ def cmd_attach(args) -> int:
     Called by: main.
     """
     uri = _upload_if_local(args.deck)
-    result = facade.ask_deck(args.id, args.instruction or "what can you do with this deck?",
-                             attachments=[uri], source_deck=uri)
+    text = args.instruction or "what can you do with this deck?"
+    result = recorded("attach", args.id, {"file": uri, "instruction": text},
+                      lambda: facade.ask_deck(args.id, text, attachments=[uri], source_deck=uri))
     _p(result)
     return 0 if result.get("ok") else 1
 
@@ -268,7 +326,7 @@ def cmd_undo(args) -> int:
 
     Called by: main(), when that subcommand is given. Returns the process exit code.
     """
-    _p(facade.undo(args.id))
+    _p(recorded("undo", args.id, {}, lambda: facade.undo(args.id)))
     return 0
 
 
@@ -351,7 +409,19 @@ def cmd_clean(args) -> int:
             if plan.objects or plan.threads:
                 print("\nDry run: nothing deleted. Add --yes to delete the above.")
             return 0
-        _p({"dry_run": False, **summary, **cleanup.execute(st, saver, plan)})
+        done = cleanup.execute(st, saver, plan)
+    # The decks gone from the bucket and the checkpointer go from the tables too, with their jobs.
+    gone = None if args.all else sorted(
+        set(plan.threads) | {o.key.split("/", 1)[0] for o in plan.objects} - set(cleanup.SHARED))
+    if args.all or (gone and not args.tidy):
+        from .db import repo
+        from .db.engine import run
+
+        try:
+            done["deleted_rows"] = run(lambda: repo.delete_decks(gone))
+        except Exception as e:                           # noqa: BLE001
+            done["deleted_rows"] = f"not reached: {e.__class__.__name__}"
+    _p({"dry_run": False, **summary, **done})
     return 0
 
 

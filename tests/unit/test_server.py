@@ -90,17 +90,19 @@ def test_bad_requests_say_what_is_wrong(client):
     assert client.get("/jobs/nope").status_code == 404
 
 
-def test_one_job_per_deck_at_a_time(offline_settings):
+@pytest.mark.anyio
+async def test_one_job_per_deck_at_a_time(offline_settings):
     import threading
 
     server._jobs = None
     gate = threading.Event()
-    first = server.jobs().submit("x", "d", lambda log: gate.wait(5) or {})
+    first = await server.jobs().submit("x", "d", {}, lambda log: {"ok": gate.wait(5)})
     with pytest.raises(server.Busy):
-        server.jobs().submit("y", "d", lambda log: {})
+        await server.jobs().submit("y", "d", {}, lambda log: {"ok": True})
     gate.set()
-    first.future.result(5)
-    assert server.jobs().submit("z", "d", lambda log: {}).future.result(5).status == "done"
+    assert (await server.jobs().view(first, wait=True))["status"] == "done"
+    third = await server.jobs().submit("z", "d", {}, lambda log: {"ok": True})
+    assert (await server.jobs().view(third, wait=True))["status"] == "done"
     server._jobs = None
 
 
@@ -108,6 +110,8 @@ def test_delete_removes_files_and_conversation(client, template_uri):
     _create(client, template_uri, deck_id="gone")
     r = client.delete("/decks/gone")
     assert r.status_code == 200 and r.json()["deleted_sessions"] == 1
+    assert r.json()["deleted_rows"] == 1
+    assert all(d["deck_id"] != "gone" for d in client.get("/decks").json()["decks"])
     assert client.get("/decks/gone").json()["exists"] is False
 
 
@@ -120,8 +124,63 @@ def test_the_mcp_tools_are_there_and_work(offline_settings, template_uri):
         async with Client(server.mcp) as c:
             names = {t.name for t in await c.list_tools()}
             assert {"create_deck", "edit_deck", "translate_deck", "ask", "answer", "undo",
-                    "get_deck", "list_decks", "delete_deck", "ingest_template", "job_status"} <= names
+                    "get_deck", "rename_deck", "list_decks", "delete_deck", "ingest_template",
+                    "job_status", "list_jobs"} <= names
             missing = await c.call_tool("get_deck", {"deck_id": "nothing"})
             return missing.data
     assert asyncio.run(go())["exists"] is False
     server._jobs = None
+
+
+def test_a_deck_gets_a_name_and_a_title_when_none_is_given(client, template_uri):
+    r = client.post("/decks?wait=true", json={
+        "brief": "The Support Bot Pilot, for ops", "template": template_uri,
+        "outline": OUTLINE, "content_pack": CONTENT})
+    job = r.json()
+    assert job["status"] == "done", job
+    deck_id = job["deck_id"]
+    assert deck_id.startswith("the-support-bot-pilot-for-ops-") and len(deck_id.rsplit("-", 1)[1]) == 6
+    deck = client.get(f"/decks/{deck_id}").json()
+    assert deck["title"] == "The Support Bot Pilot, for ops" and deck["status"] == "ready"
+    assert deck["current_file"].endswith("v001.pptx")
+
+    renamed = client.patch(f"/decks/{deck_id}", json={"title": "Pilot review"}).json()
+    assert renamed["title"] == "Pilot review" and renamed["deck_id"] == deck_id
+    listed = client.get("/decks").json()["decks"]
+    assert [d["title"] for d in listed if d["deck_id"] == deck_id] == ["Pilot review"]
+
+
+def test_jobs_are_rows_and_outlive_the_process(client, template_uri):
+    """Restart the job runner (a new process would): the job is still there, from the table."""
+    job_id = _create(client, template_uri, deck_id="kept").json()["job_id"]
+    edit = client.post("/decks/kept/edit?wait=true", json={"instruction": "make slide 2 less wordy"})
+    assert edit.json()["status"] == "done"
+
+    server._jobs = None                           # forget everything held in memory
+    after = client.get(f"/jobs/{job_id}").json()
+    assert after["status"] == "done" and after["kind"] == "create"
+    assert after["result"]["summary"] and after["result"]["download_url"].endswith("/decks/kept/download")
+
+    history = client.get("/jobs?deck_id=kept").json()
+    assert [j["kind"] for j in history] == ["edit", "create"]
+    assert history[0]["request"] == {"instruction": "make slide 2 less wordy"}
+
+
+def test_the_command_line_records_its_runs_too(offline_settings, template_uri, planner):
+    import asyncio
+
+    from deck_agent import facade
+    from deck_agent.cli import recorded
+    from deck_agent.db import repo
+
+    result = recorded("create", "from-cli", {"brief": "pilot"},
+                      lambda: facade.create_deck("from-cli", "pilot", CONTENT, template_uri,
+                                                 planner=planner, outline=OUTLINE,
+                                                 log=lambda *a, **k: None), title="Pilot")
+    assert result["ok"]
+
+    async def rows():
+        return await repo.get_deck("from-cli"), await repo.list_jobs("from-cli")
+    deck, jobs = asyncio.run(rows())
+    assert deck.status == "ready" and deck.current_file == result["deck"]
+    assert [(j.kind, j.status) for j in jobs] == [("create", "done")] and jobs[0].summary

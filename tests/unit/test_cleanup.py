@@ -175,3 +175,25 @@ def test_a_deck_whose_kit_was_replaced_says_why_it_cannot_rebuild(two_turns):
     store().delete([values["kit"]])
     can, why = _template_still_there(values)
     assert not can and "replaced" in why
+
+
+# --------------------------------------------------------------------------- keep_versions
+
+def test_only_the_newest_versions_are_kept(offline_settings, template, planner):
+    """Each version is a whole deck; with keep_versions=2 the older ones are deleted, the
+    numbering carries on from the newest, and undo still goes back one step."""
+    object.__setattr__(offline_settings, "keep_versions", 2)
+    tpl = store().put(template, f"uploads/{sha256_file(template)}-template.pptx")
+    facade.create_deck("kv", "pilot", CONTENT, tpl, planner=planner, outline=OUTLINE, **QUIET)
+    assert facade.edit_deck("kv", "make slide 2 less wordy", planner=planner, **QUIET)["ok"]
+    third = facade.edit_deck("kv", "make slide 1 less wordy", planner=planner, **QUIET)
+    assert third["ok"], third
+    assert third["version"] == 3 and third["versions_deleted"] == 1
+    session = facade.session("kv", planner=planner)
+    assert [Ref.parse(u).name for u in session["versions"]] == ["v002.pptx", "v003.pptx"]
+    files = sorted(k for k in keys("kv/") if k.count("/") == 1)
+    assert files == ["kv/v002.pptx", "kv/v003.pptx"], files
+
+    assert facade.undo("kv", planner=planner)["deck"].endswith("v002.pptx")
+    again = facade.edit_deck("kv", "make slide 1 less wordy", planner=planner, **QUIET)
+    assert again["deck"].endswith("v003.pptx"), "numbered from the newest version kept"

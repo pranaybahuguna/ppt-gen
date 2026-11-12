@@ -26,7 +26,7 @@ Postgres, so a conversation can carry on later, from another process; every file
 | | What | Why |
 |---|---|---|
 | **agent** | one Python process: the LangGraph graph and the engine (`engine/deckops`) | everything deterministic is pure Python |
-| **Postgres** | the checkpointer | the state after every node, keyed by conversation |
+| **Postgres** | the checkpointer, and the `decks` and `jobs` tables | the conversation's state after every node; a queryable record of every deck and every request |
 | **S3** (SeaweedFS locally) | every deck version, kit, template, preview and manifest | the state holds only `s3://` references, so any process can resume |
 | **sandbox image** | LibreOffice, poppler, fonts; started with no network, read-only, no capabilities | rendering slides, and running model-written code |
 
@@ -67,8 +67,9 @@ make setup
 make up        # Postgres and S3 in Docker, with named volumes
 make init      # checkpoint tables and the bucket
 make doctor    # checks engine, fonts, sandbox, Postgres, S3, model - must end with READY
-make test      # unit tests, nothing running needed
-make test-all  # + integration tests against Docker, Postgres and S3
+make test      # unit tests, nothing running needed (their database is SQLite, through aiosqlite)
+make test-all  # + integration tests against Docker, Postgres (asyncpg) and S3
+make lint      # unused imports and undefined names
 ```
 
 ### 3. Give it a model
@@ -138,7 +139,7 @@ One process on http://127.0.0.1:8765 serves both:
 - **REST**, for curl, scripts and testing by hand (below);
 - **MCP** at `http://127.0.0.1:8765/mcp` (streamable HTTP), for Claude or any MCP client. Its
   tools: `ingest_template`, `create_deck`, `edit_deck`, `translate_deck`, `ask`, `answer`, `undo`,
-  `get_deck`, `list_decks`, `delete_deck`, `job_status`. To add it to Claude Code:
+  `get_deck`, `rename_deck`, `list_decks`, `delete_deck`, `job_status`, `list_jobs`. To add it to Claude Code:
   `claude mcp add --transport http deckops http://127.0.0.1:8765/mcp`.
 
 Long operations (ingesting, creating) run as **jobs**: the request returns `202` with a
@@ -155,23 +156,25 @@ the job object below - `202` while it runs, `200` when finished (or with `?wait=
 |---|---|---|
 | `GET /health` | - | `{ok, bucket, default_template, jobs_running}` |
 | `POST /templates` | file `file` (the .pptx); `make_default` (default `true`) | job; result: `{ok, template_id, kit, template, patterns, capacity, dropped, replaced}` |
-| `POST /decks` | `deck_id`, `brief` (both required); context as files `context` (repeatable: .md .txt .csv .json .docx), text `context`, or `context_uris` (s3:// or server paths); `template` (s3:// URI) or file `template`; optional `outline`, `content_pack` (JSON, skip the model's writing) | job; result: the deck result below |
+| `POST /decks` | `brief` (required); `deck_id` (made from the brief if missing, e.g. `the-support-bot-pilot-7f3a9c`); `title` (the brief if missing); context as files `context` (repeatable: .md .txt .csv .json .docx), text `context`, or `context_uris` (s3:// or server paths); `template` (s3:// URI) or file `template`; optional `outline`, `content_pack` (JSON, skip the model's writing) | job; result: the deck result below |
 | `POST /decks/{deck_id}/edit` | `instruction` | job; deck result |
 | `POST /decks/{deck_id}/translate` | `lang`; optional `slides` (1-based list) | job; deck result |
 | `POST /decks/{deck_id}/ask` | `instruction` - the router decides what it is | job; deck result, or `{question}` |
 | `POST /decks/{deck_id}/answer` | `text` - answers the question the last run asked | job; deck result |
 | `POST /decks/{deck_id}/attach` | file `file` (a .pptx from elsewhere); optional `instruction` | job; deck result |
-| `POST /decks/{deck_id}/undo` | - | `{ok, deck, dropped, versions}` |
-| `GET /decks` | - | `{decks: {deck_id: {objects, size, session, last_written}}, objects, size}` |
-| `GET /decks/{deck_id}` | - | `{exists, versions, version_urls, download_url, template, kit, turn, trace, pending_question}` |
+| `POST /decks/{deck_id}/undo` | - | `{ok, deck, dropped, versions}`; recorded as an `undo` job |
+| `GET /decks` | - | `{decks: [{deck_id, title, status, template, current_file, jobs, created_at, updated_at, download_url}]}`, latest change first (the `decks` table) |
+| `GET /decks/{deck_id}` | - | the deck's row (`title, status, current_file, ...`) and its conversation: `{exists, versions, version_urls, download_url, kit, turn, trace, pending_question}` |
+| `PATCH /decks/{deck_id}` | `title` | the deck's row; the `deck_id` never changes |
 | `GET /decks/{deck_id}/download` | `?version=N` (default: latest) | the `.pptx` file |
-| `DELETE /decks/{deck_id}` | - | what was deleted: `{deleted_objects, freed, deleted_sessions}` |
-| `GET /jobs/{job_id}` | - | the job object |
-| `GET /jobs` | - | every job this server has run, newest first, without logs and results |
+| `DELETE /decks/{deck_id}` | - | what was deleted: `{deleted_objects, freed, deleted_sessions, deleted_rows}` - files, conversation, the deck's row and its jobs |
+| `GET /jobs/{job_id}` | `?wait=true` to hold until it finishes | the job object |
+| `GET /jobs` | `?deck_id=` one deck's; `?limit=` (default 50) | jobs from the `jobs` table, newest first: `{job_id, kind, deck_id, status, request, summary, error, seconds, created_at, finished_at}` |
 
-The job object: `{job_id, kind, deck_id, status: queued|running|done|failed, seconds, log, result,
-error, status_url}`. The deck result: `{ok, deck, versions, summary, download_url, changelog,
-warnings, errors, previews, route, manifest}`; when the run stopped to ask, `{ok: false,
+The job object: `{job_id, kind, deck_id, status: queued|running|done|failed, request, summary,
+error, seconds, created_at, finished_at, log, result, status_url}`. The deck result: `{ok, deck,
+version, versions, summary, download_url, changelog, warnings, errors, previews, route,
+manifest}` - `version` is the deck's version number, `versions` how many are kept; when the run stopped to ask, `{ok: false,
 question}`; when it declined, `{ok: false, reason, errors}`.
 
 Errors are `{error}` with `400` (bad input), `404` (no such deck, version, job or action), `409`
@@ -217,8 +220,77 @@ A finished result looks like:
    "changelog": [...], "warnings": [...], "deck": "s3://deckops/pilot/v003.pptx"}}
 ```
 
-Jobs live in the server's memory and do not survive a restart; the decks and conversations do.
-One job runs per deck at a time (a second gets `409`), and `server_workers` (2) run at once.
+Every job is a row in the `jobs` table (see [Data model](#data-model)), so it outlives the
+server; its live log and full result are held in memory while the server runs, and afterwards
+the row keeps its summary, error and log. One job runs per deck at a time (a second gets `409`),
+and `server_workers` (2) run at once.
+
+## Data model
+
+Postgres holds two kinds of tables. **LangGraph's checkpointer** tables (`checkpoints`,
+`checkpoint_blobs`, `checkpoint_writes`, `checkpoint_migrations`) store each conversation's
+state after every node, as opaque blobs keyed by `thread_id` - that is what lets a later turn
+carry on. They are LangGraph's, written by it, and not changed here. Next to them, **the
+project's own two tables** (`src/deck_agent/db/`) record what people and programs ask about:
+which decks exist, and what was done to each.
+
+**decks** - one row per presentation
+
+| Column | Type | What it holds |
+|---|---|---|
+| `deck_id` | varchar(64), **primary key** | the permanent name; also the S3 folder and the LangGraph `thread_id` |
+| `title` | text | the human name; can be renamed |
+| `template` | text | the template it was built from (s3://) |
+| `current_file` | text | the latest `.pptx` (s3://) |
+| `status` | varchar(16) | `building` / `ready` / `failed` |
+| `created_at`, `updated_at` | timestamptz | |
+
+**jobs** - one row per request
+
+| Column | Type | What it holds |
+|---|---|---|
+| `job_id` | varchar(32), **primary key** | random, one per request |
+| `deck_id` | varchar(64), **foreign key → decks.deck_id**, indexed | the deck it worked on; empty for a template ingest |
+| `kind` | varchar(16) | `ingest` / `create` / `edit` / `translate` / `ask` / `answer` / `attach` / `undo` |
+| `request` | jsonb | what was asked, e.g. `{"instruction": "make slide 4 less wordy"}` |
+| `status` | varchar(16), indexed | `queued` / `running` / `done` / `failed` |
+| `summary` | jsonb | what changed, one line each |
+| `error` | text | why it failed |
+| `log` | jsonb | the run's log lines (the last 200) |
+| `created_at`, `finished_at` | timestamptz | |
+
+One deck has many jobs; deleting a deck deletes its jobs.
+
+```
+decks (1) ────────< jobs (many)            deck_id = S3 folder = LangGraph thread_id
+```
+
+**When rows are written** (`src/deck_agent/db/repo.py`):
+
+| Moment | Write |
+|---|---|
+| a request arrives (server or CLI) | `jobs`: a row, `queued`, with the request. `decks`: a row, `building`, for a create (other requests make one only if the deck has none) |
+| the work starts | `jobs.status = running` |
+| the work finishes | `jobs`: `done` or `failed`, `summary`, `error`, `log`, `finished_at`. `decks`: `current_file`, `status`, `updated_at` (a failed create leaves the deck `failed`; a failed edit leaves it as it was) |
+| a deck is renamed | `decks.title` |
+| a deck is deleted (`DELETE /decks/...`, `deckops clean`) | its jobs, then its row - with its files and its conversation |
+| the server starts | jobs left `queued`/`running` by a server that stopped are marked `failed` |
+
+The rows are written by the server (every REST route and MCP tool) and by the command line
+(`create`, `edit`, `translate`, `ask`, `answer`, `attach`, `undo`, `kit`). A program calling
+`facade` directly is not recorded. The tables are created by `make init`, and on first use.
+
+**Async.** The tables are read and written with SQLAlchemy 2 (async) through asyncpg. The server
+is async throughout - routes, MCP tools, and jobs (asyncio tasks) - and runs the graph itself,
+which is synchronous (python-pptx, LibreOffice and model calls), in worker threads
+(`asyncio.to_thread`). The command line calls the same async functions with `db.engine.run`.
+The checkpointer stays LangGraph's `PostgresSaver` on psycopg: it is used from inside the graph,
+which runs in those threads.
+
+**Versions.** Each version is a whole copy of the deck (16-22 MB with a picture-heavy template).
+`keep_versions` (2 in the example config) keeps the newest two after each turn - the current
+one, and the one `undo` goes back to - and deletes the rest. Numbering carries on from the
+newest (`v007` follows `v006` even when `v001`-`v005` are gone). `0` keeps every version.
 
 ## Using it from another program
 
@@ -311,6 +383,8 @@ A slide it cannot get right keeps its template layout.
 | `vision_review` | `false` | look at every rendered slide; slower, catches what arithmetic cannot |
 | `approve_outline` | `false` | stop after the outline and wait for an `answer` |
 | `single_kit` | `true` | keep one template kit; ingesting replaces it |
+| `keep_versions` | `2` | deck versions kept after each turn; `0` keeps them all |
+| `db_url` | empty | the decks and jobs tables; empty means `pg_dsn` with the asyncpg driver |
 | `tidy_after_turn` | `false` | after each turn, drop the deck's older run artefacts |
 | `render_backend`, `code_runner` | `docker` | `off` to run without the sandbox |
 | `s3_endpoint`, `pg_dsn` | the local containers | point at any S3 and Postgres |
@@ -336,10 +410,13 @@ uploads/<hash>-<name>.pptx             templates and attached decks
 .venv/bin/deckops clean --deck my-deck --yes  # one deck: files and conversation together
 .venv/bin/deckops clean --all --yes           # everything
 make clean-scratch                            # local run output in local/
-make destroy-data                             # the Docker volumes: every deck and conversation
+make destroy-data                             # the Docker volumes: every deck, conversation and row
 ```
 
-Every `clean` is a dry run until `--yes`. To browse the bucket with the AWS CLI instead, give it
+Every `clean` is a dry run until `--yes`; deleting a deck deletes its row and its jobs as well.
+Only the newest `keep_versions` versions of each deck are kept anyway (see Data model).
+
+To browse the bucket with the AWS CLI instead, give it
 the development credentials (your own AWS keys are rejected):
 
 ```bash
@@ -358,11 +435,12 @@ machines' `s3_endpoint` and `pg_dsn` at shared services.
 ```
 src/deck_agent/        the agent: graph, state, nodes, model layer, sandbox clients, storage
 src/deck_agent/server.py   the MCP + REST server (deckops serve)
+src/deck_agent/db/     the decks and jobs tables: models, async engine, every read and write
 engine/deckops/        the engine that reads and writes .pptx (its README says what is in it)
 runner/                what runs inside the sandbox image
 docker/                compose, the Dockerfiles, the S3 identities
 config/                agent.example.json
-tests/unit/            tests that need nothing running
+tests/unit/            tests that need nothing running (pytest; async ones with the anyio plugin)
 tests/integration/     tests that need Docker, Postgres and S3, and skip with a reason otherwise
 tests/demo.py          a whole conversation with no model      -> make demo
 tests/validate_real_model.py   every model call against a real endpoint
@@ -391,3 +469,5 @@ Never committed: `llm.json`, `config/agent.json`, `local/`.
 - Restyling a whole deck onto a different template; adding a card to an existing slide.
 - Picture slots; slides holding real charts are skipped when a template is ingested.
 - Rendering previews of a template that has hidden slides offsets the page numbers.
+- Runs made by a program calling `facade` directly are not recorded in the `jobs` table (the
+  server and the command line are).

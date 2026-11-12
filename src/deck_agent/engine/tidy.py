@@ -338,12 +338,66 @@ def remove_orphans(ops: list[dict], plan: dict, index: dict, kit: dict) -> tuple
                  + companion_steps(pattern, example, filled)
                  + empty_field_steps(pattern, example, filled)
                  + unused_item_steps(pattern, example, len(plan_slide.get("items") or []), claimed))
-        for step in extra:
-            if step["target"] not in existing:
-                existing.add(step["target"])
-                op.setdefault("steps", []).append(step)
-                added += 1
+        for step in _consistent(extra, example, filled, existing):
+            existing.add(step["target"])
+            op.setdefault("steps", []).append(step)
+            added += 1
     return ops, added
+
+
+def _parents(example_slide: dict) -> dict[int, int]:
+    """Each nested shape's group: {shape id: group id}, from the index's `group` (probe records
+    it), or from `children` where an index nests them."""
+    out: dict[int, int] = {}
+
+    def walk(shapes, parent):
+        """Record each shape's group, then open any children."""
+        for sh in shapes:
+            try:
+                sid = int(sh["ref"].rsplit("shape:", 1)[1])
+            except (KeyError, ValueError, IndexError):
+                continue
+            if sh.get("group") is not None:
+                out[sid] = int(sh["group"])
+            elif parent is not None:
+                out[sid] = parent
+            walk(sh.get("children") or [], sid)
+
+    walk(example_slide["shapes"], None)
+    return out
+
+
+def _consistent(steps: list[dict], example_slide: dict, filled: set[int],
+                existing: set[str]) -> list[dict]:
+    """The deletions that can all be applied together, without losing anything filled.
+
+    The rules above each decide on their own, so they can disagree: one deletes a group,
+    another deletes a box inside it - and once the group is gone the box is not there, so the
+    engine refuses the whole slide ("no shape id 116"). Or a rule deletes a small group that
+    holds a box the slide fills. So: a shape whose group is being deleted is not deleted again,
+    and a group that holds anything filled is not deleted at all.
+
+    Called by: remove_orphans.
+    """
+    parents = _parents(example_slide)
+
+    def ancestors(sid):
+        """The groups a shape sits in, innermost first."""
+        while sid in parents:
+            sid = parents[sid]
+            yield sid
+
+    holds_filled = {g for f in filled for g in ancestors(f)}
+    wanted = {}
+    for step in steps:
+        target = step["target"]
+        sid = int(target.rsplit(":", 1)[1])
+        if target in existing or sid in holds_filled:
+            continue
+        wanted[sid] = step
+    deleted = {int(t.rsplit(":", 1)[1]) for t in existing if t.startswith("shape:")} | set(wanted)
+    return [step for sid, step in wanted.items()
+            if not any(g in deleted for g in ancestors(sid))]
 
 
 def _claimed_ids(pattern: dict) -> set[int]:

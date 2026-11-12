@@ -19,7 +19,7 @@ from ..engine import engine_version
 from ..infra.storage import store
 from ..settings import settings
 from ..state import DeckState, current_deck, step
-from .common import warnings_of, workspace
+from .common import version_number, warnings_of, workspace
 
 
 def deliver(state: DeckState, log=print) -> dict:
@@ -81,6 +81,7 @@ def deliver(state: DeckState, log=print) -> dict:
         "route": state.get("route"),
         "manifest": manifest_uri,
         "versions": len(state.get("deck_versions") or []),
+        "version": version_number(deck),
     }
     log(f"  delivered: {delivered['deck']}  warnings={len(warnings)} errors={len(errors)}")
     return {"delivered": delivered, "trace": [step("deliver", warnings=len(warnings),

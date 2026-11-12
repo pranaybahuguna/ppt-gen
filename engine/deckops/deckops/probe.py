@@ -65,16 +65,19 @@ def _geom(shape):
         return None
 
 
-def _shape_entries(slide_ref: str, shapes, unsupported: list):
+def _shape_entries(slide_ref: str, shapes, unsupported: list, group: int | None = None):
     """Every shape on a slide as an index entry - ref, name, geometry in slide space, text, kind,
-    whether it can be edited and why not - groups opened up into `children`.
+    whether it can be edited and why not. The list is flat: a group's members follow the group,
+    each naming it in `group` (its innermost group's shape id).
 
-    Called by: probe.
+    Called by: probe; itself, for a group's members.
     """
     for shp in shapes:
         ref = f"{slide_ref}/shape:{shp.shape_id}"
         entry = {"ref": ref, "name": shp.name, "geom": _geom(shp), "editable": True,
                  "opaque_reason": None}
+        if group is not None:
+            entry["group"] = group
         if shp.is_placeholder:
             entry["kind"] = "placeholder"
             entry["role"] = placeholder_role(shp)
@@ -82,7 +85,7 @@ def _shape_entries(slide_ref: str, shapes, unsupported: list):
         if shp.shape_type == MSO_SHAPE_TYPE.GROUP:
             entry["kind"] = "group"
             yield entry
-            yield from _shape_entries(slide_ref, shp.shapes, unsupported)
+            yield from _shape_entries(slide_ref, shp.shapes, unsupported, shp.shape_id)
             continue
         el = shp._element
         gd = el.find(".//" + qn("a:graphicData"))

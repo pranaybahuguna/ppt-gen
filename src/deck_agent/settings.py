@@ -57,6 +57,9 @@ class Settings:
     # ---- checkpointer: the conversation's state, one thread per deck session ----
     pg_dsn: str = "postgresql://deckops:deckops-dev-secret@localhost:55432/deckops"
     checkpointer: str = "postgres"              # postgres | memory (tests, one-shot CLI runs)
+    db_url: str = ""                            # the decks and jobs tables (SQLAlchemy, async).
+                                                # Empty = pg_dsn with the asyncpg driver; tests use
+                                                # sqlite+aiosqlite:///<file>
 
     # ---- the sandbox image: throwaway containers for model code and for rendering ----
     sandbox_image: str = "deckops/sandbox:0.1.0"
@@ -101,6 +104,8 @@ class Settings:
                                                 # (`deckops kit`) replaces the one there, and a
                                                 # deck made from any other template keeps its kit
                                                 # beside the deck instead. See nodes/kit.py
+    keep_versions: int = 0                      # deck versions kept after each turn (the newest
+                                                # N; 2 = undo one step). 0 = keep every version
     tidy_after_turn: bool = False               # after each delivered turn, drop the deck's older
                                                 # run artefacts (previews, plans, ops), keeping
                                                 # what the session still needs. See infra/cleanup.py

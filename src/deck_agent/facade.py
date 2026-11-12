@@ -43,6 +43,40 @@ def _run_id() -> str:
     return time.strftime("%Y%m%d-%H%M%S-") + uuid.uuid4().hex[:6]
 
 
+def _keep_recent_versions(deck_id: str, result: dict, s: Settings) -> dict:
+    """`keep_versions`: after a delivered turn, keep the newest N versions and delete the rest.
+
+    Every version is a whole copy of the deck - 16-22 MB with a picture-heavy template - and
+    only the newest two are ever used: the current one, and the one undo goes back to. The
+    older ones are dropped from the conversation's state first, then their files deleted, so a
+    failure halfway leaves files nothing points at (which `clean --orphans` finds), never a
+    state pointing at files that are gone.
+
+    Called by: _invoke and answer, after each turn that produced a deck.
+    """
+    keep = s.keep_versions
+    if keep <= 0 or not result.get("deck"):
+        return result
+    from .infra.checkpointer import checkpointer
+    from .infra.storage import store
+
+    with checkpointer(s) as saver:
+        from .graph import build_graph
+
+        graph = build_graph(None, lambda *a, **k: None).compile(checkpointer=saver)
+        snapshot = graph.get_state(_config(deck_id))
+        versions = list((snapshot.values if snapshot else {}).get("deck_versions") or [])
+        if len(versions) <= keep:
+            return result
+        dropped = versions[:-keep]
+        graph.update_state(_config(deck_id), {"deck_versions": versions[-keep:]})
+    try:
+        store(s).delete(dropped)
+    except Exception:                                    # noqa: BLE001 - orphans, found by clean
+        pass
+    return {**result, "versions": keep, "versions_deleted": len(dropped)}
+
+
 def _tidy_if_asked(deck_id: str, result: dict, s: Settings) -> dict:
     """`tidy_after_turn`: once a turn has delivered, drop the bulk the session no longer needs.
 
@@ -108,7 +142,7 @@ def _invoke(deck_id: str, payload: dict, planner=None, log=print, s: Settings | 
             question = out["__interrupt__"][0].value
             return {"ok": False, "question": question.get("question") if isinstance(question, dict)
                     else str(question), "session": summarise(out)}
-    return _tidy_if_asked(deck_id, _result(out), s)
+    return _tidy_if_asked(deck_id, _keep_recent_versions(deck_id, _result(out), s), s)
 
 
 # --------------------------------------------------------------------------- the tools
@@ -171,7 +205,7 @@ def answer(deck_id: str, text: str, planner=None, log=print, s: Settings | None 
             question = out["__interrupt__"][0].value
             return {"ok": False, "question": question.get("question") if isinstance(question, dict)
                     else str(question), "session": summarise(out)}
-    return _tidy_if_asked(deck_id, _result(out), s)
+    return _tidy_if_asked(deck_id, _keep_recent_versions(deck_id, _result(out), s), s)
 
 
 # --------------------------------------------------------------------------- the session

@@ -13,5 +13,6 @@
   "code_attempts": 3,
   "vision_review": false,
   "single_kit": true,
-  "tidy_after_turn": false
+  "tidy_after_turn": false,
+  "keep_versions": 2
 }

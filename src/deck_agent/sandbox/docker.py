@@ -21,7 +21,8 @@ from ..settings import Settings, settings
 
 
 class SandboxUnavailable(Boundary):
-    """Docker or the sandbox image is not there; the message names the fix (make image, start Docker).
+    """Docker or the sandbox image is not there; the message names the fix (make image, start
+    Docker).
     """
     kind = "sandbox_unavailable"
 

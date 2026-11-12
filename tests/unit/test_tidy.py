@@ -227,3 +227,30 @@ def test_a_field_left_empty_loses_its_box():
     steps = empty_field_steps(pattern, {"shapes": shapes}, filled={2, 11})
     assert {s["target"] for s in steps} == {"shape:10", "shape:20", "shape:21"}, \
         "empty subtitle and item boxes go; title, page and filled boxes stay; unknown ids skipped"
+
+
+def test_deletions_never_conflict_or_remove_filled_content():
+    """A box inside a group that is being deleted is not deleted again (the engine would find
+    it gone and refuse the slide), and a group holding a filled box is never deleted."""
+    from deck_agent.engine.tidy import _consistent
+
+    def group(sid, *children):
+        return {"ref": f"slide:1/shape:{sid}", "kind": "group", "children": list(children)}
+
+    box = lambda sid: {"ref": f"slide:1/shape:{sid}", "kind": "text"}
+    example = {"shapes": [group(10, box(11), box(12)), group(20, box(21), box(22))]}
+    steps = [{"op": "delete_shape", "target": f"shape:{n}"} for n in (10, 11, 20, 22)]
+    kept = {s["target"] for s in _consistent(steps, example, filled={21}, existing=set())}
+    assert kept == {"shape:10", "shape:22"}, kept
+
+
+def test_group_membership_comes_from_the_flat_index_too():
+    """probe lists every shape at the top level and names its group in `group`; that is the
+    form the real templates arrive in (a box three groups deep, deleted after its group)."""
+    from deck_agent.engine.tidy import _consistent
+
+    flat = lambda sid, group=None: {"ref": f"slide:1/shape:{sid}", "kind": "text",
+                                    **({"group": group} if group else {})}
+    example = {"shapes": [flat(123), flat(122, 123), flat(115, 122), flat(116, 115), flat(112, 123)]}
+    steps = [{"op": "delete_shape", "target": "shape:116"}]
+    assert _consistent(steps, example, filled=set(), existing={"shape:123"}) == []
