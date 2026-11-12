@@ -1,5 +1,5 @@
 {
-  "$comment": "Copy to config/agent.json (`make config` does) and edit. Every key is optional; the full list, with what each does, is in src/deck_agent/settings.py and docs/00-setup.md. Model credentials never live here - they go in llm.json.",
+  "$comment": "Copy to config/agent.json (`make config` does) and edit. Every key is optional; the full list, with what each does, is in src/deck_agent/settings.py and README.md. Model credentials never live here - they go in llm.json.",
   "s3_endpoint": "http://localhost:9000",
   "s3_bucket": "deckops",
   "pg_dsn": "postgresql://deckops:deckops-dev-secret@localhost:55432/deckops",

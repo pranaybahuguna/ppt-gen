@@ -3,7 +3,6 @@ SHELL := /bin/bash
 PY    := .venv/bin/python
 PIP   := .venv/bin/pip
 COMPOSE := docker compose -f docker/compose.yml
-ENGINE_REPO := https://github.com/pranaybahuguna/deckops
 
 export PYTHONPATH := $(CURDIR)/src
 
@@ -14,30 +13,8 @@ help:  ## list the targets
 # ---------------------------------------------------------------- setup
 
 .PHONY: setup
-setup: engine venv config image fonts samples  ## everything needed to run, from a fresh clone
-	@echo; echo "now: make up && make init && make doctor   (docs/00-setup.md has the rest)"
-
-.PHONY: engine
-engine:  ## clone the deckops engine and apply this project's patches
-	@test -d engine/deckops/.git || git clone $(ENGINE_REPO) engine/deckops
-	@cd engine/deckops && git rev-parse --short HEAD | sed 's/^/engine at /'
-	@$(MAKE) --no-print-directory engine-patch
-
-.PHONY: engine-patch
-engine-patch:  ## apply patches/*.patch to the engine clone (idempotent)
-	@for p in patches/*.patch; do \
-		if git -C engine/deckops apply --check "$(CURDIR)/$$p" 2>/dev/null; then \
-			git -C engine/deckops apply "$(CURDIR)/$$p" && echo "applied $$p"; \
-		elif git -C engine/deckops apply --reverse --check "$(CURDIR)/$$p" 2>/dev/null; then \
-			echo "already applied $$p"; \
-		else \
-			echo "COULD NOT APPLY $$p - see patches/README.md"; exit 1; \
-		fi; \
-	done
-
-.PHONY: engine-reset
-engine-reset:  ## drop the patches, returning the engine clone to upstream
-	git -C engine/deckops checkout -- .
+setup: venv config image fonts samples  ## everything needed to run, from a fresh clone
+	@echo; echo "now: make up && make init && make doctor   (README.md has the rest)"
 
 .PHONY: venv
 venv:  ## create the virtualenv and install dependencies
@@ -51,7 +28,7 @@ venv:  ## create the virtualenv and install dependencies
 config:  ## write config/agent.json from the example, if there is none (never overwrites)
 	@test -f config/agent.json && echo "config/agent.json exists, left alone" || \
 		(cp config/agent.example.json config/agent.json && echo "wrote config/agent.json")
-	@test -f llm.json || echo "no llm.json yet: copy llm.example.json and fill it in (docs/00-setup.md)"
+	@test -f llm.json || echo "no llm.json yet: copy llm.example.json and fill it in (README.md)"
 
 .PHONY: image
 image:  ## build the sandbox image (python + LibreOffice + poppler + fonts)
@@ -161,7 +138,7 @@ test-all:  ## every test, including the ones that need docker, postgres and S3
 	$(PY) -m pytest -q tests
 
 .PHONY: test-engine
-test-engine:  ## the engine's own 28 tests, unchanged, as a regression check
+test-engine:  ## the engine's own tests (engine/deckops/tests)
 	cd engine/deckops && ../../$(PY) -m pytest -q tests
 
 .PHONY: demo

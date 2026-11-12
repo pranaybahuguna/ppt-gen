@@ -35,8 +35,8 @@ def bootstrap() -> Path:
     """Put the engine on the import path. Idempotent; safe to call from anywhere."""
     if not (ENGINE_ROOT / "deckops" / "probe.py").exists():
         raise Boundary(
-            f"the deckops engine is not at {ENGINE_ROOT}. Run:\n"
-            "    git clone https://github.com/pranaybahuguna/deckops engine/deckops",
+            f"the deckops engine is not at {ENGINE_ROOT}; it is part of this repository - "
+            "check out the whole repository",
             {"expected": str(ENGINE_ROOT)},
         )
     if str(ENGINE_ROOT) not in sys.path:
@@ -97,7 +97,7 @@ def guard_deck(path: str | Path) -> None:
 
 @functools.lru_cache(maxsize=1)
 def engine_version() -> dict:
-    """What built this deck. Recorded in every manifest so a deck can be traced to a commit."""
+    """What built this deck: the repository commit, recorded in every manifest."""
     bootstrap()
     try:
         sha = subprocess.run(

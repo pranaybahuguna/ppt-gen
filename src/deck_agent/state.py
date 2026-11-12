@@ -27,7 +27,7 @@ If deckops ever has to talk to a person directly, the change is one field and on
         ...
 
 and the router reads `state["messages"][-1]` instead of `state["instruction"]`. Nothing else in
-the graph needs to know. `docs/03-state.md` has the longer argument.
+the graph needs to know.
 
 Reducers: `trace` and `errors` accumulate, because several nodes append to them in one run and
 a lost trace entry is a lost debugging session. Everything else is last-write-wins, which is

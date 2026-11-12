@@ -19,7 +19,7 @@ different kinds of reason:
    then used only for job 1.
 
 Everything else - probing, compiling, applying edits, the byte-preserving save, overflow and
-overlap checks - is pure Python and runs in the agent process. See docs/02-architecture.md.
+overlap checks - is pure Python and runs in the agent process.
 """
 from __future__ import annotations
 
