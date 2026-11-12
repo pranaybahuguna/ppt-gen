@@ -16,7 +16,7 @@ import time
 import uuid
 from pathlib import Path
 
-from ..infra.storage import sha256_file, store
+from ..infra.storage import sha256_file
 from ..infra.workspace import Workspace, open_workspace
 from ..settings import settings
 from ..state import DeckState

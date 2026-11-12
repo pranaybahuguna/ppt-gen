@@ -14,8 +14,8 @@ A brand file only needs the keys you want to change, e.g.
     {"name": "My brand", "font": "Arial", "accent": "E11D48", "dark": "1F2937",
      "group_colours": ["E11D48", "2563EB", "16A34A"], "chart_palette": ["E11D48", "2563EB", ...]}
 
-To use a real template instead, write a kit for it by hand (README, "Style kits"),
-using `python3 tools/inspect_deck.py your_template.pptx` to find the shape ids.
+To use a real template instead, ingest it: `deckops kit your_template.pptx` builds and tests
+its kit automatically.
 """
 import json
 import os

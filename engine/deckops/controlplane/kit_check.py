@@ -7,13 +7,7 @@ is removed from the kit, so a wrong automatic label shrinks the menu instead of 
 """
 from __future__ import annotations
 
-import copy
-import json
-import os
-import shutil
-
-from deckops.compiler import CompileError
-from deckops.patterns import _shapes_by_id, compile_from_kit
+from deckops.patterns import _shapes_by_id
 
 WORDS = ("sample text used to test how this layout holds content of a realistic length "
          "without overflowing or overlapping other parts of the slide").split()
@@ -119,118 +113,7 @@ def test_slides(name: str, pat: dict, index: dict, counts=None, stretch=1.0) -> 
     return slides
 
 
-def acceptance_test(root, kit_path, index, planner=None, log=print, example_pngs=None):
-    """Returns (final_kit, report). example_pngs: {pattern: png bytes} for the optional vision
-    check.
-    """
-    from . import orchestrator
-    kit = json.load(open(kit_path))
-    report = {}
-    plan_slides, owner = [], []
-    for name, pat in kit["patterns"].items():               # 1. labels make sense? does it compile?
-        problems = role_problems(pat, _shapes_by_id(index["slides"][pat["slide"] - 1]))
-        if problems:
-            report[name] = {"passed": False, "reasons": problems}
-            continue
-        slides = test_slides(name, pat, index)
-        one = copy.deepcopy(kit)
-        one["patterns"] = {name: pat}
-        try:
-            compile_from_kit({"footer": "Sample footer text", "slides": slides}, index, one, {"datasets": TEST_DATA})
-        except CompileError as e:
-            report[name] = {"passed": False, "reasons": [f"compile: {m}" for m in e.args[0]][:5]}
-            continue
-        plan_slides += slides
-        owner += [name, name]
-        report[name] = {"passed": True, "reasons": []}
-    if plan_slides:                                          # 2. build it all once and check
-        plan = {"footer": "Sample footer text", "slides": plan_slides}
-        run, man = orchestrator.create_from_kit(root, kit_path, "kit acceptance test", {"datasets": TEST_DATA},
-                                                planner, log=log, plan=plan)
-        for f in man["findings"]:
-            r = report[owner[f["slide_index"]]]
-            r["passed"] = False
-            r["reasons"].append(f"{f['kind']} on test slide {f['slide_index'] + 1}")
-        if man["structural"] or man["leaked_example_text"]:
-            for name in set(owner):
-                report[name]["passed"] = False
-                report[name]["reasons"].append("structural problem or leaked example text in test deck")
-        vision = getattr(planner, "vision", False) and getattr(planner, "can_compare", True) and example_pngs
-        for i, name in enumerate(owner):                     # 3. optional: does it still look like the example?
-            if not vision or i % 2 == 0 or not report[name]["passed"]:
-                continue
-            try:
-                verdict = planner.compare_slides(example_pngs[name], open(run.p(man["previews"][i]), "rb").read())
-            except Exception as e:                           # a failing model call must not pass a pattern
-                verdict = {"same_design": False, "problems": [f"vision check failed: {e.__class__.__name__}"]}
-            if not verdict.get("same_design"):
-                report[name]["passed"] = False
-                report[name]["reasons"] += [f"vision: {p}" for p in verdict.get("problems", [])][:3] or ["vision: design changed"]
-        report["_test_deck"] = run.p("out.pptx")
-        report["_vision_check"] = "run" if vision else "not run (no vision model configured)"
-    final = copy.deepcopy(kit)
-    final["patterns"] = {n: p for n, p in kit["patterns"].items() if report.get(n, {}).get("passed")}
-    final.pop("draft", None)
-    return final, report
-
-
 CAPACITY_CAP = 16          # never offer more than this many items on one slide
 HEADROOM = 1.15            # measure with text 15% longer than the example's
 
 
-def measure_capacity(root, kit_path, index, planner=None, log=print, cap=CAPACITY_CAP):
-    """How many items does each pattern really hold? Measured, not guessed.
-
-    The example slide shows k items. Build one test slide each with k+1, k+2 ... cap items, using
-    text as long as the example's, and run the normal checks. A pattern's max becomes the largest
-    count before the first failure (text overflow, overlap, or a layout that can't be built).
-    Returns (kit with measured "max", {pattern: {"example": k, "max": m, "first_failure": ...}}).
-    """
-    from . import orchestrator
-    kit = json.load(open(kit_path))
-    trial = copy.deepcopy(kit)
-    slides, owner, report = [], [], {}
-    for name, pat in kit["patterns"].items():
-        if "items" not in pat:
-            continue
-        k = len(pat["items"]["groups"])
-        report[name] = {"example": k, "max": k, "first_failure": None}
-        counts = list(range(k + 1, cap + 1))
-        if not counts:
-            continue
-        trial["patterns"][name]["items"]["max"] = cap
-        one = copy.deepcopy(trial)
-        one["patterns"] = {name: trial["patterns"][name]}
-        # text 15% longer than the example's: the limit must leave room for real sentences
-        for n, s in zip(counts, test_slides(name, pat, index, counts, stretch=HEADROOM)):
-            try:
-                compile_from_kit({"footer": "Sample footer text", "slides": [s]}, index, one, {"datasets": TEST_DATA})
-            except CompileError as e:
-                report[name]["_compile_fail"] = (n, e.args[0][0])
-                break
-            slides.append(s)
-            owner.append((name, n))
-    if slides:
-        path = os.path.join(os.path.dirname(os.path.abspath(kit_path)), "capacity_trial_kit.json")
-        json.dump(trial, open(path, "w"), indent=1)
-        run, man = orchestrator.create_from_kit(root, path, "capacity test", {"datasets": TEST_DATA},
-                                                planner, log=log, plan={"footer": "Sample footer text",
-                                                                        "slides": slides})
-        bad = {}
-        for f in man["findings"]:
-            name, n = owner[f["slide_index"]]
-            bad.setdefault(name, set()).add(n)
-        broken = bool(man["structural"] or man["leaked_example_text"])
-        for name, r in report.items():
-            tried = sorted(n for nm, n in owner if nm == name)
-            for n in tried:
-                if broken or n in bad.get(name, ()):
-                    r["first_failure"] = f"{n} items: text no longer fits"
-                    break
-                r["max"] = n
-    for name, r in report.items():
-        cf = r.pop("_compile_fail", None)
-        if cf and not r["first_failure"] and r["max"] == cf[0] - 1:
-            r["first_failure"] = f"{cf[0]} items: {cf[1]}"
-        kit["patterns"][name]["items"]["max"] = r["max"]
-    return kit, report

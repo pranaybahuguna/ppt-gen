@@ -46,33 +46,6 @@ class SetFontSize(_Op):
     size_pt: float = Field(ge=6, le=96)
 
 
-class TextContent(BaseModel):
-    """Plain text for a placeholder."""
-    model_config = ConfigDict(extra="forbid")
-    kind: Literal["text"]
-    text: str
-
-
-class BulletsContent(BaseModel):
-    """Bullet points for a placeholder."""
-    model_config = ConfigDict(extra="forbid")
-    kind: Literal["bullets"]
-    items: list[str] = Field(min_length=1)
-
-
-Content = Annotated[Union[TextContent, BulletsContent], Field(discriminator="kind")]
-
-
-class AddSlide(_Op):
-    """Add a slide on a layout and fill its placeholders (the layout-based create path)."""
-    op: Literal["add_slide"]
-    layout: str                     # layout id from the template catalog, e.g. "M0L1"
-    after: str | None = None        # slide ref; None = append
-    fill: dict[int, Content]        # placeholder idx -> content (compiler resolved roles)
-    notes: str | None = None
-    drop_empty_placeholders: bool = True
-
-
 class DeleteSlide(_Op):
     """Delete a slide."""
     op: Literal["delete_slide"]
@@ -172,7 +145,7 @@ class SetDocProperties(_Op):
 
 
 Op = Annotated[
-    Union[SetParagraphText, SetRunText, SetFontSize, AddSlide, DeleteSlide, DeleteShape, SetGeometry,
+    Union[SetParagraphText, SetRunText, SetFontSize, DeleteSlide, DeleteShape, SetGeometry,
           AddSlideFromPattern, SetDocProperties],
     Field(discriminator="op"),
 ]

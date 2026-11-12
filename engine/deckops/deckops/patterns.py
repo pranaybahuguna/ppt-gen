@@ -98,7 +98,7 @@ def compile_chart(spec: dict, datasets: dict, style: dict, where: str) -> tuple[
 def load_kit(path: str) -> dict:
     """Read a kit file and check every pattern names its example slide and fields.
 
-    Called by: the engine's standalone paths (orchestrator, deckops_cli) and its tests; the agent
+    Called by: the engine's tests, which load the sample template's hand-written kit. The agent
     reads kits from object storage instead.
     """
     kit = json.load(open(path))

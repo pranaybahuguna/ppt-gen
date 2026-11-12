@@ -5,4 +5,3 @@ __pycache__/
 llm.json
 *.local.json
 runs/
-llm_check_results.zip

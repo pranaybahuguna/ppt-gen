@@ -62,69 +62,9 @@ def compile_translate(plan: dict, index: dict) -> list[dict]:
 
 # ---- create -----------------------------------------------------------------
 
-FAMILIES = {
-    "title": ["title", "subtitle"],
-    "section": ["title", "body"],
-    "title_and_body": ["title", "body"],
-    "two_content": ["title", "body", "body"],
-    "title_only": ["title"],
-}
 # Tie-breakers when two layouts have the same role shape. For a real corporate
 # template this is config ("loaded, not inferred"), not a heuristic.
 NAME_HINTS = {"section": "section", "title_and_body": "content", "title": "title slide"}
-
-
-def _content_roles(layout):
-    """A layout's placeholders that hold content (not date, footer or slide number)."""
-    return [ph for ph in layout["placeholders"] if ph["role"] != "chrome"]
-
-
-def pick_layout(family: str, catalog: list[dict], family_map: dict | None = None) -> dict:
-    """The slide layout for a layout family (title, title+body, two columns, ...), by its
-    placeholders' roles.
-
-    Called by: compile_create - the engine's older, layout-based create path. Not used by the
-    agent,
-    which builds from a kit instead.
-    """
-    if family_map and family in family_map:
-        return next(l for l in catalog if l["id"] == family_map[family])
-    want = Counter(FAMILIES[family])
-    exact = [l for l in catalog if Counter(p["role"] for p in _content_roles(l)) == want]
-    if not exact:
-        raise CompileError([f"no layout in template matches family {family!r}"])
-    hint = NAME_HINTS.get(family, "")
-    exact.sort(key=lambda l: (hint not in l["name"].lower(), l["id"]))
-    return exact[0]
-
-
-def compile_create(plan: dict, catalog: list[dict], family_map: dict | None = None) -> list[dict]:
-    """Compile a layout-family plan into add_slide and set-text operations.
-
-    Called by: the engine's standalone orchestrator and its tests. Not used by the agent, which
-    builds from a kit (patterns.compile_from_kit).
-    """
-    ops, errors = [], []
-    for n, s in enumerate(plan["slides"]):
-        fam = s["layout_family"]
-        if fam not in FAMILIES:
-            errors.append(f"slide {n}: unknown layout_family {fam!r}")
-            continue
-        layout = pick_layout(fam, catalog, family_map)
-        by_role: dict[str, list] = {}
-        for ph in sorted(_content_roles(layout), key=lambda p: (p["x"] or 0, p["y"] or 0)):
-            by_role.setdefault(ph["role"], []).append(ph["idx"])
-        fill = {}
-        for b in s["blocks"]:
-            slots = by_role.get(b["role"])
-            if not slots:
-                errors.append(f"slide {n}: layout {layout['name']!r} has no free {b['role']!r} placeholder")
-                continue
-            fill[slots.pop(0)] = b["content"]
-        ops.append({"op": "add_slide", "layout": layout["id"], "fill": fill, "notes": s.get("notes")})
-    if errors:
-        raise CompileError(errors)
-    return ops
 
 
 # ---- edit: numbered card grids -----------------------------------------------

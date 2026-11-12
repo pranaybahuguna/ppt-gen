@@ -1,7 +1,7 @@
 """Deterministic deck operations, in this process.
 
-Everything here is a thin, typed wrapper over an engine function, plus the bits of
-bookkeeping the engine's own orchestrator did inline and that all three flows need:
+Everything here is a thin, typed wrapper over an engine function, plus the bookkeeping the
+create, edit and translate routes all need:
 
 * `probe`      - read a deck into JSON (shapes, geometry, text, fingerprints)
 * `apply_ops`  - bind-then-apply a batch of ops and save byte-preservingly

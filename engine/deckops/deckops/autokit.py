@@ -28,7 +28,6 @@ from lxml import etree
 from pptx import Presentation
 from pptx.enum.shapes import MSO_SHAPE_TYPE
 from pptx.opc.constants import RELATIONSHIP_TYPE as RT
-from pptx.util import Emu
 
 from .refs import to_slide
 

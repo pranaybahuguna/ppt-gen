@@ -21,18 +21,17 @@ import zipfile
 
 from lxml import etree
 from pptx import Presentation
-from pptx.oxml import parse_xml
 from pptx.oxml.ns import qn
 from pptx.oxml.xmlchemy import OxmlElement
 
 from pptx.opc.constants import RELATIONSHIP_TYPE as RT
 
-from .ops import (AddSlide, AddSlideFromPattern, DeleteShape, DeleteSlide, DuplicateShape, OpList, SetDocProperties,
+from .ops import (AddSlideFromPattern, DeleteShape, DeleteSlide, DuplicateShape, OpList, SetDocProperties,
                   SetChart, SetFontSize, SetGeometry, SetParagraphText, SetRunText, SetShapeText, SetTable)
 from .refs import (Ref, RefError, TagError, find_shape_el, para_runs, para_text, para_tokens,
                    parse_tagged, resolve, sha, to_own, to_slide)
 
-PHASE = {SetParagraphText: 0, SetRunText: 0, SetFontSize: 1, SetGeometry: 1, DeleteShape: 2, AddSlide: 3,
+PHASE = {SetParagraphText: 0, SetRunText: 0, SetFontSize: 1, SetGeometry: 1, DeleteShape: 2,
          AddSlideFromPattern: 3, DeleteSlide: 4, SetDocProperties: 5}
 
 
@@ -92,14 +91,6 @@ def _bind(prs, op):
             elif _sid(st.target) not in known:
                 raise RefError(f"step {k}: no shape {st.target} on {op.source}")
         return {"slide": slide}
-    if isinstance(op, AddSlide):
-        layout = _layout(prs, op.layout)
-        after = _sldId_el(prs, Ref.parse(op.after).slide) if op.after else None
-        idxs = {ph.placeholder_format.idx for ph in layout.placeholders}
-        missing = set(op.fill) - idxs
-        if missing:
-            raise RefError(f"layout {op.layout} has no placeholder idx {sorted(missing)}")
-        return {"layout": layout, "after": after}
     raise RefError(f"unknown op {op}")
 
 
@@ -121,15 +112,6 @@ def _sldId_el(prs, slide_id):
         if int(el.get("id")) == slide_id:
             return el
     raise RefError(f"no slide id {slide_id}")
-
-
-def _layout(prs, layout_id):
-    """The slide layout for an id `M<master>L<layout>` (as probe's layout catalog names them)."""
-    try:
-        mi, li = layout_id[1:].split("L")
-        return prs.slide_masters[int(mi)].slide_layouts[int(li)]
-    except Exception:
-        raise RefError(f"unknown layout {layout_id}")
 
 
 # ---- copying a slide ------------------------------------------------------------
@@ -470,24 +452,6 @@ def _apply(prs, op, b, warnings):
             _apply_step(new, st)
         if op.notes:
             new.notes_slide.notes_text_frame.text = op.notes
-    elif isinstance(op, AddSlide):
-        slide = prs.slides.add_slide(b["layout"])
-        for ph in list(slide.placeholders):
-            content = op.fill.get(ph.placeholder_format.idx)
-            if content is None:
-                if op.drop_empty_placeholders:
-                    ph._element.getparent().remove(ph._element)
-                continue
-            tf = ph.text_frame
-            items = [content.text] if content.kind == "text" else content.items
-            tf.text = items[0]
-            for it in items[1:]:
-                tf.add_paragraph().text = it
-        if op.notes:
-            slide.notes_slide.notes_text_frame.text = op.notes
-        if b["after"] is not None:
-            new_el = prs.slides._sldIdLst[-1]
-            b["after"].addnext(new_el)
 
 
 # ---- save ---------------------------------------------------------------------

@@ -197,8 +197,6 @@ def orphan_steps(pattern: dict, example_slide: dict, filled: set[int]) -> list[d
 
     Called by: remove_orphans.
     """
-    from .deck import bootstrap  # noqa: F401  (kept local; this module is imported early)
-
     shapes = {int(s["ref"].rsplit("shape:", 1)[1]): s for s in example_slide["shapes"]}
     field_ids = set(pattern["fields"].values())
     if "items" in pattern:

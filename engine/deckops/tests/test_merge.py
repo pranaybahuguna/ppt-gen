@@ -1,5 +1,4 @@
 """Rules + vision: vision decides meaning, the rules decide structure, physics vetoes both."""
-import json
 import os
 import subprocess
 import sys

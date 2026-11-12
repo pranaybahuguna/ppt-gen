@@ -21,27 +21,6 @@ Return JSON: {"paragraphs":[{"ref":"...","tagged":"..."}]} with the same refs.""
 SHORTEN_SYSTEM = """Shorten each tagged paragraph by about {pct}% in {lang} while keeping its meaning and its tags.
 Return JSON: {{"paragraphs":[{{"ref":"...","tagged":"..."}}]}}."""
 
-CREATE_SYSTEM = """Plan a slide deck. Output JSON {"slides":[...]}; each slide has
-"message" (the one sentence the slide proves), "layout_family" (one of: title, section,
-title_and_body, two_content, title_only), "blocks" ([{"role":"title|subtitle|body",
-"content":{"kind":"text","text":...} or {"kind":"bullets","items":[...]}}]) and optional "notes".
-Never output coordinates, sizes, colours or fonts."""
-
-
-KIT_SYSTEM = """You plan a slide deck using ONLY the slide patterns listed below, and ONLY facts from the
-content pack (never invent numbers). Output JSON:
-{"footer": "<short deck footer>", "slides": [{"pattern": "<name>", "fields": {...}, "items": [...],
-  "table": {"header": [...], "rows": [[...]]}, "notes": "<optional speaker notes>",
-  "sources": ["<fact ids used>"]}]}
-Use "items" only for patterns that list items, "table" only for table patterns, and
-"charts": {"<slot>": {"type": "...", "dataset": "<id>", "category": "<column>", "series": ["<column>", ...],
-"title": "...", "number_format": "#,##0"}} only for chart patterns - pick a dataset from the content pack;
-the numbers are taken from it automatically, never write numbers into a chart yourself. Keep text short:
-headings under 6 words, bullet points under 15 words. Never output positions, sizes, colours or fonts.
-Patterns:
-{patterns}"""
-
-
 OUTLINE_SYSTEM = """You write the CONTENT of a slide deck, slide by slide, using ONLY facts from the content
 pack. Do not think about layout or design. Output JSON:
 {"title": "<deck title>", "footer": "<short footer>", "slides": [
@@ -119,10 +98,6 @@ class StubPlanner:
         """Offline shortening from a small fixed list."""
         out = [{"ref": p["ref"], "tagged": self.FR_SHORT[p["text"]]} for p in paragraphs if p["text"] in self.FR_SHORT]
         return {"paragraphs": out}
-
-    def plan_from_kit(self, brief: str, kit_description: str, content: dict) -> dict:
-        """Not available offline: there is no model to write content."""
-        raise NotImplementedError("the offline stub has no model: pass a ready-made plan instead")
 
     def outline(self, brief, content, max_points):
         """Not available offline: there is no model to write content. Pass an outline instead."""
@@ -203,31 +178,6 @@ class StubPlanner:
                 fixed["items"] = [{k: shorten(v) for k, v in it.items()} for it in fixed.get("items", [])]
         return fixed
 
-    def plan_create(self, brief: str) -> dict:
-        """A fixed layout-family plan, for the engine's standalone create path. Not used by the
-        agent.
-        """
-        return {"mode": "create", "slides": [
-            {"message": "Title", "layout_family": "title", "blocks": [
-                {"role": "title", "content": {"kind": "text", "text": "Passive mandates: fee compression"}},
-                {"role": "subtitle", "content": {"kind": "text", "text": "Asset Management strategy review · Nov 2026"}}]},
-            {"message": "Fee compression is concentrated in passive mandates", "layout_family": "title_and_body",
-             "blocks": [
-                 {"role": "title", "content": {"kind": "text", "text": "Fee compression is concentrated in passive mandates"}},
-                 {"role": "body", "content": {"kind": "bullets", "items": [
-                     "Passive fees down 9 bps over three years", "Active fees broadly stable",
-                     "Mix shift explains two thirds of revenue decline"]}}],
-             "notes": "Source: internal fee database, ev-12."},
-            {"message": "Options compared", "layout_family": "two_content", "blocks": [
-                {"role": "title", "content": {"kind": "text", "text": "Two responses"}},
-                {"role": "body", "content": {"kind": "bullets", "items": ["Scale: consolidate index range", "Lower unit cost"]}},
-                {"role": "body", "content": {"kind": "bullets", "items": ["Differentiate: thematic ETFs", "Higher margin, higher risk"]}}]},
-            {"message": "Next steps", "layout_family": "section", "blocks": [
-                {"role": "title", "content": {"kind": "text", "text": "Decision needed by Q1"}},
-                {"role": "body", "content": {"kind": "text", "text": "Steering committee, 15 January"}}]},
-        ]}
-
-
 class OpenAICompatPlanner:
     """The model client for any OpenAI-compatible /v1/chat/completions endpoint: JSON mode,
     retries without temperature for models that reject it, pictures for the vision calls.
@@ -293,18 +243,6 @@ class OpenAICompatPlanner:
         """
         items = [{"ref": p["ref"], "tagged": p["tagged"]} for p in paragraphs]
         return self._chat(SHORTEN_SYSTEM.format(pct=pct, lang=lang), json.dumps({"paragraphs": items}, ensure_ascii=False))
-
-    def plan_create(self, brief):
-        """A layout-family plan for the engine's standalone create path. Not used by the agent."""
-        return {"mode": "create", **self._chat(CREATE_SYSTEM, brief)}
-
-    def plan_from_kit(self, brief, kit_description, content):
-        """A whole plan in one call, for the engine's standalone kit path. Not used by the agent,
-        which plans in
-        two stages (outline, then render_slide per slide).
-        """
-        user = json.dumps({"request": brief, "content_pack": content}, ensure_ascii=False)
-        return self._chat(KIT_SYSTEM.replace("{patterns}", kit_description), user)
 
     # ---- two-stage generation (controlplane/slide_flow.py) --------------------------------
     def outline(self, brief, content, max_points):

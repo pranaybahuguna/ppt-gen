@@ -1,21 +1,8 @@
-"""Create a brand-new deck in the look of an example deck (see deckops/patterns.py).
+"""Test data: a content pack and a hand-written plan for the sample template's kit.
 
-    python3 samples/make_style_template.py out/        # example template + its style kit
-    python3 examples/create_from_style_kit.py out/example_style_kit.json out/new_deck.pptx
-
-PLAN is what the model returns when given the kit's pattern list and a content pack.
-It's written by hand here so the example runs without a model. With a model configured,
-pass plan=None and the planner produces it.
+Used by test_patterns.py. PLAN is what the model would return when given the kit's patterns
+and this content pack, written by hand so the tests need no model.
 """
-import json
-import os
-import shutil
-import sys
-
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, ROOT)
-from controlplane import orchestrator        # noqa: E402
-from controlplane.planner import StubPlanner  # noqa: E402
 
 # The content pack: what the agent layer gathered. Charts may only use these datasets.
 CONTENT = {
@@ -83,18 +70,3 @@ PLAN = {
                                           "note": "Next review: end of Q1."}},
     ],
 }
-
-
-def main(kit_path, dst):
-    """Build a deck from the sample template's hand-written kit with a fixed plan, through the
-    standalone orchestrator. Its CONTENT and PLAN are also used by the engine's tests.
-    """
-    run, man = orchestrator.create_from_kit(os.path.join(ROOT, "out", "workspaces"), kit_path,
-                                            "pilot update deck", CONTENT, StubPlanner(), plan=PLAN)
-    shutil.copy(run.p("out.pptx"), dst)
-    print(json.dumps({k: man[k] for k in ("slides", "ops", "findings", "structural", "leaked_example_text")}, indent=1))
-    return run, man
-
-
-if __name__ == "__main__":
-    main(sys.argv[1], sys.argv[2])

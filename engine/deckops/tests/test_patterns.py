@@ -1,4 +1,3 @@
-import json
 import os
 import subprocess
 import sys
@@ -14,8 +13,8 @@ from deckops.executor import execute  # noqa: E402
 from deckops.patterns import compile_from_kit, layout_items, leaked_text, load_kit  # noqa: E402
 from deckops.probe import iter_paragraphs, probe  # noqa: E402
 
-sys.path.insert(0, os.path.join(ROOT, "examples"))
-from create_from_style_kit import CONTENT, PLAN  # noqa: E402
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from style_kit_data import CONTENT, PLAN  # noqa: E402
 
 
 @pytest.fixture(scope="module")

@@ -17,7 +17,6 @@ beside that deck (`<deck>/kit-<hash>.json`) and goes when the deck is purged.
 """
 from __future__ import annotations
 
-from ..engine.deck import probe
 from ..engine.kitbuild import build_kit
 from ..engine.normalise import prepare
 from ..infra.storage import store

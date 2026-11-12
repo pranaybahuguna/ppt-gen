@@ -7,9 +7,9 @@ from pptx.util import Pt
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from deckops.compiler import CompileError, compile_create, compile_translate, pick_layout  # noqa: E402
+from deckops.compiler import CompileError, compile_translate  # noqa: E402
 from deckops.executor import ExecError, execute  # noqa: E402
-from deckops.probe import iter_paragraphs, layout_catalog, probe  # noqa: E402
+from deckops.probe import iter_paragraphs, probe  # noqa: E402
 from deckops.refs import Ref, parse_tagged  # noqa: E402
 
 
@@ -85,18 +85,3 @@ def test_stale_expect_refuses_whole_batch(deck, tmp_path):
     assert not os.path.exists(out)
 
 
-def test_layout_picking_by_role_shape():
-    cat = layout_catalog(Presentation())
-    assert pick_layout("title", cat)["name"] == "Title Slide"
-    assert pick_layout("title_and_body", cat)["name"] == "Title and Content"
-    assert pick_layout("two_content", cat)["name"] == "Two Content"
-    assert pick_layout("section", cat)["name"] == "Section Header"
-
-
-def test_create_fails_loudly_on_missing_role():
-    cat = layout_catalog(Presentation())
-    plan = {"slides": [{"layout_family": "title_only", "blocks": [
-        {"role": "title", "content": {"kind": "text", "text": "a"}},
-        {"role": "body", "content": {"kind": "text", "text": "b"}}]}]}
-    with pytest.raises(CompileError):
-        compile_create(plan, cat)
