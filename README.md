@@ -127,6 +127,68 @@ download link. Then, in the same conversation, any time later:
 
 With `source .venv/bin/activate` the command is just `deckops`.
 
+## The server: MCP and REST
+
+```bash
+make serve          # or: .venv/bin/deckops serve [--host 0.0.0.0] [--port 8765]
+```
+
+One process on http://127.0.0.1:8765 serves both:
+
+- **REST**, for curl, scripts and testing by hand (below);
+- **MCP** at `http://127.0.0.1:8765/mcp` (streamable HTTP), for Claude or any MCP client. Its
+  tools: `ingest_template`, `create_deck`, `edit_deck`, `translate_deck`, `ask`, `answer`, `undo`,
+  `get_deck`, `list_decks`, `delete_deck`, `job_status`. To add it to Claude Code:
+  `claude mcp add --transport http deckops http://127.0.0.1:8765/mcp`.
+
+Long operations (ingesting, creating) run as **jobs**: the request returns `202` with a
+`job_id` at once; poll `GET /jobs/<job_id>` for its status and live log, or add `?wait=true`
+to hold the request until it finishes. Every finished result has a **`summary`** - what
+changed, one line each - and a **`download_url`** for the `.pptx`, served by this server.
+
+```bash
+# ingest a template (multipart upload); it becomes the default
+curl -X POST localhost:8765/templates -F file=@"Your Template.pptx"
+
+# create a deck from a document - returns a job
+curl -X POST localhost:8765/decks -F deck_id=pilot -F brief="explain this to engineers" \
+     -F context=@notes.md
+curl localhost:8765/jobs/<job_id>                    # status, log, and the result when done
+
+# or with JSON, notes in the request, held until done
+curl -X POST 'localhost:8765/decks?wait=true' -H 'content-type: application/json' \
+     -d '{"deck_id": "pilot", "brief": "a deck on the pilot", "context": "it ran eight weeks..."}'
+
+curl -X POST 'localhost:8765/decks/pilot/edit?wait=true' -H 'content-type: application/json' \
+     -d '{"instruction": "make slide 4 less wordy"}'
+curl -X POST 'localhost:8765/decks/pilot/translate?wait=true' -H 'content-type: application/json' \
+     -d '{"lang": "fr", "slides": [1, 2]}'
+curl -X POST 'localhost:8765/decks/pilot/attach?wait=true' -F file=@existing.pptx \
+     -F instruction="shorten slide 2"
+curl -X POST localhost:8765/decks/pilot/undo
+
+curl -OJ localhost:8765/decks/pilot/download          # the latest .pptx (?version=N for others)
+curl localhost:8765/decks/pilot                       # versions, with a download link for each
+curl localhost:8765/decks                             # every deck
+curl -X DELETE localhost:8765/decks/pilot             # files and conversation
+curl localhost:8765/health
+```
+
+A finished result looks like:
+
+```json
+{"status": "done", "seconds": 312.4, "result": {
+   "ok": true, "versions": 3, "download_url": "http://127.0.0.1:8765/decks/pilot/download",
+   "summary": ["create: version 3 of the deck",
+               "built 12 slides from the template's layouts (cover x1, columns x2, text x2, cards x1)",
+               "designed slide 3 as a hub and spoke - A central circle ...",
+               "warning: ..."],
+   "changelog": [...], "warnings": [...], "deck": "s3://deckops/pilot/v003.pptx"}}
+```
+
+Jobs live in the server's memory and do not survive a restart; the decks and conversations do.
+One job runs per deck at a time (a second gets `409`), and `server_workers` (2) run at once.
+
 ## Using it from another program
 
 ```python
@@ -149,6 +211,25 @@ returns one of three shapes:
 {"ok": false, "question": "Which language should I translate it into?"}
 {"ok": false, "reason": "...", "errors": [...]}
 ```
+
+## How the sandbox runs
+
+Docker Compose runs only the two services that stay up: **Postgres** and **SeaweedFS** (`make up`).
+The sandbox is not a service. `make image` builds `deckops/sandbox:0.1.0` once, and the agent starts
+a fresh container from it **per job**, with `docker run` from `src/deck_agent/sandbox/docker.py`:
+
+- one per **render** (slide previews: LibreOffice to PDF, poppler to PNG) - `runner/render.py`;
+- one per **model-written code** attempt - `runner/code_harness.py`;
+- one for `make selftest` - `runner/selftest.py`.
+
+Each runs with `--network none --read-only --cap-drop ALL --security-opt no-new-privileges`,
+memory, CPU and process limits, the job's scratch folder mounted at `/work`, and as your own
+user id. It is removed after its exit code and output have been read.
+
+The image holds LibreOffice (impress), poppler, the metric-compatible fonts (Carlito, Caladea,
+Liberation, DejaVu) and, for model-written code, python-pptx, lxml, Pillow and XlsxWriter
+(`runner/requirements.txt`). The fonts are also copied out (`make fonts`) because the agent
+measures text with them.
 
 ## The graph
 
@@ -203,6 +284,8 @@ A slide it cannot get right keeps its template layout.
 | `render_backend`, `code_runner` | `docker` | `off` to run without the sandbox |
 | `s3_endpoint`, `pg_dsn` | the local containers | point at any S3 and Postgres |
 | `llm_client` | `openai-compat` | `langchain`, or `stub` for no model |
+| `server_host`, `server_port` | `127.0.0.1`, `8765` | where `deckops serve` listens |
+| `server_url` | empty | the address put in download links, when callers reach the server by another name |
 
 ## Storage and clean-up
 
@@ -243,6 +326,7 @@ machines' `s3_endpoint` and `pg_dsn` at shared services.
 
 ```
 src/deck_agent/        the agent: graph, state, nodes, model layer, sandbox clients, storage
+src/deck_agent/server.py   the MCP + REST server (deckops serve)
 engine/deckops/        the engine that reads and writes .pptx (its README says what is in it)
 runner/                what runs inside the sandbox image
 docker/                compose, the Dockerfiles, the S3 identities

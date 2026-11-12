@@ -92,6 +92,11 @@ class Settings:
                                                 # per deck, never twice in a row; slides over it
                                                 # are designed by model-written code instead.
                                                 # 0 = no limit. Needs allow_custom_code.
+    server_host: str = "127.0.0.1"              # `deckops serve`: where the MCP + REST server listens
+    server_port: int = 8765
+    server_url: str = ""                        # how callers reach it, for download links; empty =
+                                                # http://<server_host>:<server_port>
+    server_workers: int = 2                     # long operations run at once (one per deck)
     single_kit: bool = False                    # kits/ holds one kit only: ingesting a template
                                                 # (`deckops kit`) replaces the one there, and a
                                                 # deck made from any other template keeps its kit

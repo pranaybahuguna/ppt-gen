@@ -133,6 +133,10 @@ seed:  ## put the sample template and a content pack in the bucket
 test:  ## the tests that need nothing running (no containers, no postgres, no model)
 	$(PY) -m pytest -q tests/unit
 
+.PHONY: lint
+lint:  ## unused imports and undefined names (pyflakes)
+	@$(PY) -m pyflakes src runner engine/deckops tests | grep -v "__init__.py\|RecordedVision" || echo "clean"
+
 .PHONY: test-all
 test-all:  ## every test, including the ones that need docker, postgres and S3
 	$(PY) -m pytest -q tests
@@ -144,6 +148,10 @@ test-engine:  ## the engine's own tests (engine/deckops/tests)
 .PHONY: demo
 demo:  ## build a deck, edit it, translate it and use the escape hatch - with no model at all
 	$(PY) tests/demo.py
+
+.PHONY: serve
+serve:  ## run the MCP + REST server on http://127.0.0.1:8765 (MCP at /mcp)
+	$(PY) -m deck_agent.cli serve
 
 .PHONY: graph
 graph:  ## print the graph as mermaid

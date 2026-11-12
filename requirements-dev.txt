@@ -1,3 +1,4 @@
 -r requirements.txt
 pytest>=8
 pytest-timeout>=2
+pyflakes==4.1.0   # make lint: unused imports and undefined names

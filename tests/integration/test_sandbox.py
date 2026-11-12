@@ -7,9 +7,6 @@ fenced in and the claim in `sandbox/__init__.py` is false.
 """
 from __future__ import annotations
 
-import json
-import tempfile
-from pathlib import Path
 
 import pytest
 

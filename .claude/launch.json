@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "deckops-server",
+      "runtimeExecutable": ".venv/bin/deckops",
+      "runtimeArgs": ["serve"],
+      "port": 8765
+    }
+  ]
+}

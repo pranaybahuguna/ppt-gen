@@ -249,3 +249,24 @@ def test_the_code_is_told_what_is_on_the_slide(offline_settings, template, plann
     assert "content" in roles
     assert all({"id", "role", "x", "y", "w", "h", "text"} <= set(sh) for sh in shapes)
     assert any(sh["text"] for sh in shapes if sh["role"] == "content"), "its words are listed"
+
+
+def test_the_first_slide_keeps_the_cover_layout(offline_settings, template):
+    """Points on a cover pushed it out of the cover layout into whatever held two points."""
+    import json
+
+    from deck_agent.engine import bootstrap
+    from deck_agent.nodes.create import _keep_the_cover
+
+    bootstrap()
+    from controlplane import slide_flow
+
+    kit = json.loads((template.parent / "example_style_kit.json").read_text())
+    outline = {"slides": [
+        {"kind": "cover", "title": "Pilot", "subtitle": "Eight weeks",
+         "points": [{"heading": f"Point {n}", "text": "more than a cover holds"} for n in range(7)]},
+        {"kind": "list", "title": "More", "points": [{"heading": "A", "text": "a"}]}]}
+    jobs = slide_flow.expand(outline, kit)
+    note = _keep_the_cover(jobs, kit, len(jobs))
+    assert {o["pattern"].split("@")[0] for o in jobs[0]["options"]} == {"cover"}
+    assert "points" not in jobs[0]["content"] and note

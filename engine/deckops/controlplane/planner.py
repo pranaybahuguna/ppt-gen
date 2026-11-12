@@ -9,6 +9,7 @@ Two implementations behind one interface:
 from __future__ import annotations
 
 import json
+import urllib.error
 import urllib.request
 
 TRANSLATE_SYSTEM = """You translate PowerPoint paragraphs. Each paragraph is given as tagged text:
@@ -204,7 +205,6 @@ class OpenAICompatPlanner:
     def _post(self, messages) -> dict:
         """One chat call in JSON mode. If the endpoint refuses a setting (some models reject
         temperature=0), it is dropped once and the call retried; the refusal is remembered."""
-        import urllib.error
         body = {"model": self.model, "response_format": {"type": "json_object"}, "messages": messages}
         if self.send_temperature:
             body["temperature"] = 0

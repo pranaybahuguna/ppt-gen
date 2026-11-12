@@ -213,3 +213,17 @@ def test_the_fit_check_sees_text_inside_a_group(tmp_path):
     prs.save(path)
     findings = check(path)["findings"]
     assert any(f["kind"] == "overflow" for f in findings), findings
+
+
+def test_a_field_left_empty_loses_its_box():
+    """A styled box with nothing in it is an empty card on the slide; it goes."""
+    from deck_agent.engine.tidy import empty_field_steps
+
+    shapes = [_shape(2, "placeholder", 0.5, 0.4, 11, 0.9, "Title"),
+              _shape(99, "text", 12, 6.9, 0.4, 0.3, "1")]
+    shapes += [_shape(sid, "text", 1, 2 + i, 3, 0.5, "x") for i, sid in enumerate((10, 11, 20, 21))]
+    pattern = {"fields": {"title": 2, "page": 99, "subtitle": 10},
+               "items": {"groups": [[11, 20], [21, 22]], "fields": {"heading": 0, "detail": 1}}}
+    steps = empty_field_steps(pattern, {"shapes": shapes}, filled={2, 11})
+    assert {s["target"] for s in steps} == {"shape:10", "shape:20", "shape:21"}, \
+        "empty subtitle and item boxes go; title, page and filled boxes stay; unknown ids skipped"

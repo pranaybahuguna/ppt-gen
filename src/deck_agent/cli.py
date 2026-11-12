@@ -17,6 +17,7 @@
     deckops clean [...]                  delete decks, tidy them, or clear everything (dry run
                                          unless --yes)
     deckops graph                        print the graph as mermaid
+    deckops serve                        the MCP + REST server (http://127.0.0.1:8765)
     deckops selftest                     prove the sandbox is isolated
 """
 from __future__ import annotations
@@ -165,82 +166,20 @@ def cmd_seed(args) -> int:
 
 
 def cmd_kit(args) -> int:
-    """`deckops kit <template.pptx>`: ingest a template.
-
-    Prepares the file, builds and tests a kit (engine.kitbuild.build_kit), stores the kit in
-    `kits/` and the prepared template in `uploads/`, and with --make-default writes it into
-    config/agent.json. With single_kit on, other kits and their templates are removed.
+    """`deckops kit <template.pptx>`: ingest a template (templates.ingest) and print the result.
 
     Called by: main(). Exit code 1 when the template yields no usable layouts.
     """
-    from .engine.kitbuild import build_kit
-    from .nodes.kit import kit_key
-    from .infra.storage import sha256_file
-    from .sandbox.render import render
+    from .templates import ingest
 
-    from .engine.normalise import prepare  # noqa: PLC0415
-
-    s = settings()
-    source = Path(args.template)
-    if not source.exists():
-        sys.exit(f"no such template: {source}")
-
-    # Prepare it first; the prepared copy is what the kit addresses, so it is what decks must
-    # be built from. When nothing needed changing the bytes come through unchanged, so the
-    # template keeps its own hash and its own file.
-    workdir = s.workspace_root / f"kit-{sha256_file(source)}"
-    workdir.mkdir(parents=True, exist_ok=True)
-    prepared_path = workdir / "prepared.pptx"
-    prepared = prepare(source, prepared_path)
-    template = prepared_path if prepared["changed"] else source
-    if prepared["changed"]:
-        print(f"prepared the template: {prepared['ids_renumbered']} nested shape id(s) made "
-              f"unique on slides {prepared['slides_touched']}, which the engine could not "
-              "otherwise have used")
-    template_id = sha256_file(template)
-    kit, report = build_kit(template, workdir, make_planner(s), render=render)
-
-    # A kit with no patterns is a *failure*, not a result, and caching it would be worse than
-    # not caching anything: the cache is keyed by the template's content hash, so the same
-    # template would keep getting the empty answer back for ever - including after the reason
-    # it failed has been fixed. `ensure_kit` already declines rather than caching; this is the
-    # command-line path catching up with it.
-    uri = template_uri = replaced = None
-    if kit["patterns"]:
-        uri = store().put_json(kit, kit_key(template_id))
-        # The template goes in the bucket too, so a deck can be built from it by URI alone. It
-        # is the *prepared* copy when there is one: that is the file the kit's ids refer to.
-        name = source.stem + ("-prepared" if prepared["changed"] else "") + ".pptx"
-        template_uri = store().put(template, f"uploads/{template_id}-{name.replace(' ', '-')}")
-        if s.single_kit:
-            # Only now, with the new kit safely stored: a failed ingest replaces nothing.
-            from .infra.cleanup import keep_only_kit
-
-            replaced = keep_only_kit(store(), template_id)
-        if args.make_default:
-            cfg_path = REPO / "config" / "agent.json"
-            cfg = json.loads(cfg_path.read_text()) if cfg_path.exists() else {}
-            cfg["default_template"] = template_uri
-            cfg_path.write_text(json.dumps(cfg, indent=1) + "\n")
-    if args.out:
-        Path(args.out).write_text(json.dumps(kit, indent=1))
-    beside = None
-    if prepared["changed"] and kit["patterns"]:
-        # The kit refers to this file's ids, so hand it over explicitly rather than leaving it
-        # in a scratch directory the caller does not know about.
-        beside = Path(args.out or "kit.json").with_name(source.stem + "-prepared.pptx")
-        beside.write_bytes(prepared_path.read_bytes())
-    _p({"template_id": template_id, "kit": uri, "template": template_uri,
-        "default_template": bool(args.make_default and template_uri),
-        "replaced": replaced if s.single_kit else "single_kit is off: other kits kept",
-        "use_this_template": str(beside) if beside else str(source),
-        "patterns": sorted(kit["patterns"]),
-        "capacity": report.get("capacity"),
-        "dropped": {n: r.get("reasons") for n, r in report["patterns"].items()
-                    if not n.startswith("_") and not r.get("passed")}})
-    if not kit["patterns"]:
+    try:
+        result = ingest(args.template, args.out, args.make_default)
+    except FileNotFoundError as e:
+        sys.exit(str(e))
+    _p(result)
+    if not result["ok"]:
         print("\nNo usable layouts: this template was not cached, and no deck can be built "
-              "from it yet. The reasons above are per pattern.")
+              "from it yet. The reasons above are per layout.")
         return 1
     return 0
 
@@ -416,6 +355,17 @@ def cmd_clean(args) -> int:
     return 0
 
 
+def cmd_serve(args) -> int:
+    """`deckops serve`: run the MCP + REST server (server.serve) until interrupted.
+
+    Called by: main(); `make serve`.
+    """
+    from .server import serve
+
+    serve(args.host, args.port)
+    return 0
+
+
 def cmd_graph(args) -> int:
     """`deckops graph`. Prints the graph as mermaid (graph.mermaid).
 
@@ -462,6 +412,10 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("init", help="create the checkpoint tables and the bucket").set_defaults(fn=cmd_init)
     sub.add_parser("seed", help="upload the sample template and content pack").set_defaults(fn=cmd_seed)
     sub.add_parser("graph", help="print the graph as mermaid").set_defaults(fn=cmd_graph)
+    sv = sub.add_parser("serve", help="run the MCP + REST server")
+    sv.add_argument("--host", help="default: server_host (127.0.0.1)")
+    sv.add_argument("--port", type=int, help="default: server_port (8765)")
+    sv.set_defaults(fn=cmd_serve)
     sub.add_parser("selftest", help="prove the sandbox is isolated").set_defaults(fn=cmd_selftest)
 
     k = sub.add_parser("kit", help="build and cache a style kit for a template")

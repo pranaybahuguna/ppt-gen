@@ -147,6 +147,9 @@ def render_slides(state: DeckState, planner=None, log=print) -> dict:
         index = probe(template)
         jobs = slide_flow.expand(outline_doc, kit)      # splits over-full slides, attaches options
         total = len(jobs)
+        cover_note = _keep_the_cover(jobs, kit, total)
+        if cover_note:
+            log(f"  slide 1: {cover_note}")
 
         # A slide the strict rules found no layout for gets one more, named, deterministic
         # attempt before anything is drawn by generated code. See engine/fallback.py for why
@@ -265,6 +268,37 @@ def render_slides(state: DeckState, planner=None, log=print) -> dict:
     return out
 
 
+def _keep_the_cover(jobs: list[dict], kit: dict, total: int) -> str | None:
+    """Make the first slide use the template's cover layout. -> a note when content had to give.
+
+    The outline sometimes puts points on the cover. A template's cover layout has no room for
+    points, so it was not offered, and the model took whatever could hold two points - on one
+    deck a layout of fourteen small cards, which came out as a grid of empty boxes on the first
+    slide anyone sees. A cover is a cover: its points are left off (the deck says them later),
+    and only cover layouts are offered.
+
+    Called by: render_slides, before any slide is placed.
+    """
+    from controlplane import slide_flow
+
+    covers = [n for n in kit.get("patterns", {}) if n.split("@")[0] == "cover"]
+    if not jobs or not covers:
+        return None
+    job = jobs[0]
+    options = [o for o in job["options"] if o["pattern"].split("@")[0] == "cover"]
+    note = None
+    if not options and job["content"].get("points"):
+        content = {k: v for k, v in job["content"].items() if k != "points"}
+        options = [o for o in slide_flow.options_for(content, kit, 1, total)
+                   if o["pattern"].split("@")[0] == "cover"]
+        if options:
+            job["content"] = content
+            note = "the cover layout has no room for points, so they are left off the cover"
+    if options:
+        job["options"] = options
+    return note
+
+
 def after_render(state: DeckState) -> str:
     """Decision after render_slides: assemble when any slide was placed, straight to custom_code
     when none was, decline if render_slides declined.
@@ -309,6 +343,12 @@ def assemble(state: DeckState, log=print) -> dict:
                     "route_reason": "the plan for this deck did not fit the template.",
                     "trace": [step("assemble", outcome="plan invalid")]}
 
+        # Slides that start from a layout but are reworked into diagrams: not counted as uses of
+        # their layout, which is the point of reworking them.
+        plan_jobs = state.get("plan_jobs") or list(range(len(plan["slides"])))
+        reworked = {plan_jobs.index(x["position"])
+                    for x in [*(state.get("pending_code") or []), *(state.get("code_slides") or [])]
+                    if x.get("rework") and x.get("position") in plan_jobs}
         plan_uri = ws.publish_json(plan, "plan.json")
         ws.publish_json(result.ops, "ops.json")
         out_path = result.out_path
@@ -335,8 +375,8 @@ def assemble(state: DeckState, log=print) -> dict:
             "deck_versions": versions, "deck_plan": plan_uri,
             "findings": result.findings, "structural": result.structural, "leaked": result.leaked,
             "previews": previews,
-            "changelog": [{"change": f"built {len(plan['slides'])} slides from the template's layouts",
-                           "pattern_counts": _counts(plan)},
+            "changelog": [{"change": _built(plan, reworked),
+                           "pattern_counts": _counts(plan, reworked)},
                           *[{"change": f"designed slide {c['position'] + 1} as a {c.get('form')}",
                              "slide": c["position"] + 1, "why": c.get("why"),
                              "explanation": c.get("explanation")}
@@ -346,15 +386,29 @@ def assemble(state: DeckState, log=print) -> dict:
         }
 
 
-def _counts(plan: dict) -> dict:
-    """How many slides use each layout - for the changelog.
+def _counts(plan: dict, skip: set[int] = frozenset()) -> dict:
+    """How many slides use each layout, leaving out slides being reworked - for the changelog.
 
     Called by: assemble.
     """
     out: dict[str, int] = {}
-    for s in plan.get("slides", []):
-        out[s.get("pattern", "?")] = out.get(s.get("pattern", "?"), 0) + 1
+    for i, s in enumerate(plan.get("slides", [])):
+        if i not in skip:
+            out[s.get("pattern", "?")] = out.get(s.get("pattern", "?"), 0) + 1
     return out
+
+
+def _built(plan: dict, reworked: set[int]) -> str:
+    """The changelog's first line: how many slides use a template layout as it is, and how many
+    are reworked into diagrams.
+
+    Called by: assemble.
+    """
+    n = len(plan.get("slides", []))
+    line = f"built {n - len(reworked)} slides from the template's layouts"
+    if reworked:
+        line += f"; {len(reworked)} more are reworked into diagrams"
+    return line
 
 
 # --------------------------------------------------------------------------- repair

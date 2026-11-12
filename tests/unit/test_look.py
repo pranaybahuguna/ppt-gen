@@ -8,7 +8,6 @@ and a vision model that fails must not be able to stop a deck going out.
 """
 from __future__ import annotations
 
-from pathlib import Path
 
 import pytest
 

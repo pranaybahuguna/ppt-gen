@@ -1,14 +1,18 @@
-# --- agent runtime (control plane). Never parses .pptx bytes. ---
+# --- the agent: graph, checkpointer, object storage ---
 langgraph==1.2.20
 langgraph-checkpoint-postgres==3.2.0
 psycopg[binary,pool]==3.3.8
 boto3==1.44.0
 
-# --- pure-python pieces of the engine that run in the control plane ---
-# (deckops' compilers and pydantic op types; no file bytes are opened here)
+# --- reading and writing decks (the engine in engine/deckops runs in this process) ---
 pydantic>=2.6
-python-pptx==1.0.2   # imported by deckops.compiler/patterns for EMU helpers only
+python-pptx==1.0.2
 
-# --- optional model layer: set LLM_CLIENT=langchain to use it ---
+# --- the server: MCP tools and REST endpoints (deckops serve) ---
+fastmcp==4.1.8
+uvicorn==0.54.0
+python-multipart==0.0.33
+
+# --- optional model layer: set llm_client to "langchain" to use it ---
 langchain-core==1.7.7
 langchain-openai==1.7.4

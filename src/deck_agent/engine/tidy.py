@@ -269,6 +269,8 @@ def companion_steps(pattern: dict, example_slide: dict, filled: set[int]) -> lis
     """
     shapes = _all_shapes(example_slide)
     named = {sid for name, sid in pattern["fields"].items() if name not in ("page", "footer")}
+    if "items" in pattern:
+        named |= {sid for group in pattern["items"]["groups"] for sid in group}
     empty = {sid for sid in named if sid not in filled}
     if not empty:
         return []
@@ -296,6 +298,25 @@ def companion_steps(pattern: dict, example_slide: dict, filled: set[int]) -> lis
     return steps
 
 
+def empty_field_steps(pattern: dict, example_slide: dict, filled: set[int]) -> list[dict]:
+    """Delete the boxes of fields this slide leaves empty.
+
+    A layout's text boxes are often styled - a white card, a bar down one side - so a field left
+    empty is not invisible: it is an empty card. A layout with fourteen small detail fields per
+    item, given two short items, came out as a grid of empty cards. The title, page number and
+    footer are never removed; neither is any box the slide fills.
+
+    Called by: remove_orphans.
+    """
+    shapes = _all_shapes(example_slide)
+    keep = {sid for name, sid in pattern["fields"].items() if name in ("title", "page", "footer")}
+    ids = set(pattern["fields"].values())
+    if "items" in pattern:
+        ids |= {sid for group in pattern["items"]["groups"] for sid in group}
+    return [{"op": "delete_shape", "target": f"shape:{sid}"}
+            for sid in sorted(ids - filled - keep) if sid in shapes]
+
+
 def remove_orphans(ops: list[dict], plan: dict, index: dict, kit: dict) -> tuple[list[dict], int]:
     """Add the orphan deletions to a compiled op list. -> (ops, how many were added)
 
@@ -315,6 +336,7 @@ def remove_orphans(ops: list[dict], plan: dict, index: dict, kit: dict) -> tuple
         claimed = _claimed_ids(pattern)
         extra = (orphan_steps(pattern, example, filled)
                  + companion_steps(pattern, example, filled)
+                 + empty_field_steps(pattern, example, filled)
                  + unused_item_steps(pattern, example, len(plan_slide.get("items") or []), claimed))
         for step in extra:
             if step["target"] not in existing:
