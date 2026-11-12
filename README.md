@@ -72,56 +72,52 @@ sequenceDiagram
     API-->>U: the .pptx
 ```
 
-### 2. The LangGraph flow, with what each node reads and writes
-
-`run/` is the turn's folder, `<deck_id>/<run_id>/`. After **every** node, LangGraph saves the
-state to Postgres (`checkpoints`, `checkpoint_blobs`, `checkpoint_writes`) - not repeated below.
+### 2. The LangGraph flow
 
 ```mermaid
 flowchart TD
-    start([START]) --> intake
-    intake["<b>intake</b><br/>S3 read: attached decks<br/>(safety-checked, probed)"] --> route
-    route["<b>route</b><br/>rules, or a model when unsure"]
-    route -->|create| gather
-    route -->|edit| edit_plan
-    route -->|translate| translate_plan
-    route -->|unsure| ask
-    route -->|cannot| decline
-    ask["<b>ask</b><br/>interrupt: the state waits in<br/>the checkpoint for an answer"] -->|answer| route
-
-    subgraph create [create]
-        gather["<b>gather</b><br/>S3 read: uploads/ context<br/>S3 write: run/content_pack.json,<br/>run/gather_report.json"] --> ensure_kit
-        ensure_kit["<b>ensure_kit</b><br/>S3 read: kits/hash.json, the template<br/>S3 write when built: the kit,<br/>run/kit_report.json"] --> outline
-        outline["<b>outline</b><br/>S3 write: run/outline.json"] --> approve_outline
-        approve_outline["<b>approve_outline</b><br/>optional interrupt"] --> render_slides
-        render_slides["<b>render_slides</b><br/>S3 write: run/render_attempts.json"] --> assemble
-        assemble["<b>assemble</b><br/>S3 write: run/plan.json, run/ops.json,<br/>deck_id/vNNN.pptx, run/previews/*.png<br/>Sandbox: render"] --> look
-        look["<b>look</b><br/>S3 read: previews (vision_review)"] -->|findings, rounds left| repair
-        repair["<b>repair</b><br/>S3 write: run/repair-N.json"] --> assemble
-        look -->|slides to rework| custom_code
-        custom_code["<b>custom_code</b><br/>Sandbox: run model code, render<br/>S3 write: run/custom-slide-N.py + ctx,<br/>deck_id/vNNN.pptx, previews"]
-    end
-
-    subgraph edit [edit]
-        edit_plan["<b>edit_plan</b><br/>S3 write: run/edit_plan.json"] --> edit_apply
-        edit_apply["<b>edit_apply</b><br/>S3 write: deck_id/vNNN.pptx, previews,<br/>run/plan.json on a layout change"] --> look_e["<b>look</b>"]
-    end
-
-    subgraph translate [translate]
-        translate_plan["<b>translate_plan</b><br/>S3 write: run/translate_plan.json"] --> translate_apply
-        translate_apply["<b>translate_apply</b><br/>S3 write: run/ops-N.json,<br/>deck_id/vNNN.pptx, previews"] --> look_t["<b>look</b>"]
-        look_t -->|overflow| translate_repair["<b>translate_repair</b>"] --> translate_apply
-    end
-
+    start([start]) --> intake --> route
+    route -->|create| gather --> ensure_kit --> outline --> approve_outline --> render_slides --> assemble --> look
+    look -->|problems| repair --> assemble
+    look -->|slides to rework| custom_code --> deliver
     look -->|clean| deliver
-    custom_code --> deliver
-    look_e --> deliver
-    look_t --> deliver
-    deliver["<b>deliver</b><br/>S3 write: run/manifest.json<br/>a presigned download link"] --> done([END])
-    decline["<b>decline</b><br/>says why"] --> done
-
-    done -.-> after["<b>after the graph</b> (facade, server)<br/>S3: delete versions beyond keep_versions<br/>Postgres: jobs done/failed + summary,<br/>decks current_file + status"]
+    route -->|edit| edit_plan --> edit_apply --> look_e[look] --> deliver
+    route -->|translate| translate_plan --> translate_apply --> look_t[look] --> deliver
+    look_t -->|overflow| translate_repair --> translate_apply
+    route -->|unsure| ask -->|answer| route
+    route -->|cannot do it| decline --> finish([end])
+    deliver --> finish
 ```
+
+**What each node does.** `run/` is the turn's folder in S3, `<deck_id>/<run_id>/`. After every
+node LangGraph also saves the state in Postgres (a checkpoint) - not repeated in the table.
+
+| Node | What it does | Model | Writes to S3 |
+|---|---|---|---|
+| `intake` | starts the turn; checks and reads any attached deck | - | - |
+| `route` | decides: create, edit, translate, ask or decline | only when the rules are unsure | - |
+| `ask` | stops and waits for your answer | - | - |
+| `gather` | turns your request and documents into facts, each checked against its source | yes | `run/content_pack.json`, `run/gather_report.json` |
+| `ensure_kit` | finds the template's kit (or builds it once) | building only | the kit, when built |
+| `outline` | writes what each slide says | yes | `run/outline.json` |
+| `approve_outline` | optionally waits for your approval | - | - |
+| `render_slides` | puts each slide into a layout; marks over-used layouts for rework | yes, per slide | `run/render_attempts.json` |
+| `assemble` | builds the deck (no model), checks it, renders previews | - | `<deck_id>/vNNN.pptx`, `run/plan.json`, `run/ops.json`, `run/previews/` |
+| `look` | a vision model looks at each slide (if `vision_review` is on) | yes, if on | - |
+| `repair` | sends slides that did not fit back to the model with exact limits | yes | `run/repair-N.json` |
+| `custom_code` | reworks marked slides into diagrams with code, in the sandbox | yes | `<deck_id>/vNNN.pptx`, `run/custom-slide-N.py`, previews |
+| `edit_plan` | turns an edit request into actions | yes | `run/edit_plan.json` |
+| `edit_apply` | applies them, checks, renders | - | `<deck_id>/vNNN.pptx`, previews |
+| `translate_plan` | translates the text, keeping formatting | yes | `run/translate_plan.json` |
+| `translate_apply` | applies the translation, checks | - | `<deck_id>/vNNN.pptx`, previews |
+| `translate_repair` | shortens translated text that overflows | yes | - |
+| `deliver` | writes the run's record and the download link | - | `run/manifest.json` |
+| `decline` | says why it will not do it | - | - |
+
+**Around the graph** (the server, or the command line): before it runs, a `jobs` row
+(`queued`, then `running`) and, for a create, a `decks` row; after it, the job is marked `done`
+or `failed` with its summary, the deck row gets the latest file, and versions older than
+`keep_versions` are deleted from S3.
 
 ### 3. The tables
 
