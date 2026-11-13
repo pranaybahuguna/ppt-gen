@@ -77,17 +77,44 @@ sequenceDiagram
 ```mermaid
 flowchart TD
     start([start]) --> intake --> route
-    route -->|create| gather --> ensure_kit --> outline --> approve_outline --> render_slides --> assemble --> look
-    look -->|problems| repair --> assemble
-    look -->|slides to rework| custom_code --> deliver
-    look -->|clean| deliver
-    route -->|edit| edit_plan --> edit_apply --> look_e[look] --> deliver
-    route -->|translate| translate_plan --> translate_apply --> look_t[look] --> deliver
-    look_t -->|overflow| translate_repair --> translate_apply
+
+    route -->|create| gather --> ensure_kit --> outline --> approve_outline --> render_slides --> assemble
+    route -->|edit| edit_plan --> edit_apply
+    route -->|translate| translate_plan --> translate_apply
     route -->|unsure| ask -->|answer| route
-    route -->|cannot do it| decline --> finish([end])
-    deliver --> finish
+    route -->|cannot do it| decline
+
+    assemble --> look
+    edit_apply --> look
+    translate_apply --> look
+
+    look -->|create: slides that did not fit| repair --> assemble
+    look -->|create: slides to rework| custom_code --> deliver
+    look -->|translate: text overflows| translate_repair --> translate_apply
+    look -->|done| deliver
+
+    deliver --> finish([end])
+    decline --> finish
+
+    classDef shared fill:#e8eaf6,stroke:#5c6bc0,color:#1a237e
+    classDef create fill:#e8f5e9,stroke:#43a047,color:#1b5e20
+    classDef edit fill:#e3f2fd,stroke:#1e88e5,color:#0d47a1
+    classDef translate fill:#fff3e0,stroke:#fb8c00,color:#e65100
+    classDef stop fill:#fce4ec,stroke:#d81b60,color:#880e4f
+    classDef terminal fill:#eceff1,stroke:#546e7a,color:#263238
+
+    class intake,route,look,deliver shared
+    class gather,ensure_kit,outline,approve_outline,render_slides,assemble,repair,custom_code create
+    class edit_plan,edit_apply edit
+    class translate_plan,translate_apply,translate_repair translate
+    class ask,decline stop
+    class start,finish terminal
 ```
+
+Colours: **purple** - every route passes through it; **green** - create; **blue** - edit;
+**orange** - translate; **pink** - stops (a question, or a refusal). `look` is one node: every
+route goes through it after building, and the decision after it (`after_look`) sends each route
+to its own next step.
 
 **What each node does.** `run/` is the turn's folder in S3, `<deck_id>/<run_id>/`. After every
 node LangGraph also saves the state in Postgres (a checkpoint) - not repeated in the table.
