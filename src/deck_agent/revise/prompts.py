@@ -17,6 +17,16 @@ _GUIDE = _GUIDE.replace(_STRICT, (
     "    that they are illustrative\n"))
 
 
+ARROWHEADS = """  * arrowheads: python-pptx has no setting for them; add one to a line or connector like
+    this (the head goes on the line's END point, so draw it from source to target):
+        from pptx.oxml.ns import qn
+        c = slide.shapes.add_connector(MSO_CONNECTOR.STRAIGHT, x1, y1, x2, y2)
+        c.line.color.rgb = RGBColor.from_string("525B88"); c.line.width = Pt(2)
+        ln = c.line._get_or_add_ln()
+        ln.append(ln.makeelement(qn("a:tailEnd"), {{"type": "triangle", "w": "med", "len": "med"}}))
+    a two-way line gets "a:headEnd" too. Never say a line has an arrow unless you added one."""
+
+
 SPLIT_SYSTEM = """You turn a request about an existing PowerPoint deck into tasks that can be done
 independently and in parallel, one slide each wherever possible. You do not do the work.
 
@@ -106,6 +116,7 @@ Write a module defining:
     text_frame.text only when the formatting should go too
   * positions and sizes in EMU (914400 per inch); from pptx.util import Emu, Pt, Inches
   * colours: from pptx.dml.color import RGBColor; RGBColor.from_string("1F4E79")
+""" + ARROWHEADS + """
   * keep everything inside the slide; keep text readable (no smaller than 10pt)
   * do not save the deck and do not add or remove slides - the harness does the rest
   * imports only from: """ + ", ".join(sorted(ALLOWED_IMPORTS)) + """
@@ -172,7 +183,8 @@ Write a module defining:
     13-18pt, never below 11pt; size every text box for its text (wrap long lines) so nothing
     overflows or overlaps
   * icons: build them from simple shapes (MSO_SHAPE ovals, rounded rectangles, chevrons,
-    arrows, a few lines) - no pictures exist; arrows: MSO_SHAPE.RIGHT_ARROW or connectors
+    arrows, a few lines) - no pictures exist; block arrows: MSO_SHAPE.RIGHT_ARROW
+""" + ARROWHEADS + """
   * EMU everywhere (914400 per inch); from pptx.util import Emu, Pt, Inches;
     from pptx.dml.color import RGBColor; from pptx.enum.shapes import MSO_SHAPE, MSO_CONNECTOR;
     from pptx.enum.text import PP_ALIGN, MSO_ANCHOR
