@@ -117,16 +117,19 @@ def test_a_vague_request_stops_and_asks_then_resumes(offline_settings, uploaded_
     assert resumed["route"] == "translate"
 
 
-def test_something_we_do_not_do_is_declined_with_a_reason(offline_settings, uploaded_template, planner):
+def test_something_we_cannot_do_is_declined_with_a_reason(offline_settings, uploaded_template, planner):
     deck_id = "test-decline"
     facade.create_deck(deck_id, "a deck", CONTENT, uploaded_template, planner=planner,
                        log=lambda *a, **k: None, outline=OUTLINE)
-    answer = facade.ask_deck(deck_id, "restyle this onto the new corporate template",
-                             planner=planner, log=lambda *a, **k: None)
+
+    class NamesSlide40(type(planner)):           # as a model would: the request named slide 40
+        def split_edit(self, payload):
+            return {"tasks": [{"kind": "delete", "slide": 40, "instruction": "delete slide 40"}]}
+
+    answer = facade.ask_deck(deck_id, "delete slide 40", planner=NamesSlide40(), log=lambda *a, **k: None)
     assert answer["ok"] is False
-    assert answer["route"] == "restyle"
-    assert "not supported yet" in answer["reason"]
-    assert "build a new deck" in answer["reason"], "a plain no should still offer the nearest thing"
+    assert answer["route"] == "decline"
+    assert "do not exist" in answer["reason"], "the reason says why, not just no"
 
 
 def test_create_with_no_template_asks_for_one(offline_settings, planner):

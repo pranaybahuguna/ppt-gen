@@ -125,7 +125,7 @@ def after_route(state: DeckState) -> str:
         return "split"
     if chosen == "custom":
         return "split"                    # a custom slide is an edit: add or draw it
-    return "decline"                      # restyle, or anything we do not do yet
+    return "decline"                      # anything we do not do
 
 
 def decline(state: DeckState) -> dict:
@@ -141,11 +141,7 @@ def decline(state: DeckState) -> dict:
     Say plainly that we will not do this, and why. Never silently do something else.
     """
     chosen = state.get("route")
-    why = {
-        "restyle": "moving a deck onto a different template is not supported yet. What I can do "
-                   "is build a new deck in the new template from this one's content - say the "
-                   "word and I will.",
-    }.get(chosen, state.get("route_reason") or "I could not work out what to do with this request.")
+    why = state.get("route_reason") or "I could not work out what to do with this request."
     return {
         "delivered": {"ok": False, "route": chosen, "reason": why,
                       "supported": sorted(SUPPORTED)},

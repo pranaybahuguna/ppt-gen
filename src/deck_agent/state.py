@@ -55,10 +55,10 @@ def accumulate(old: list, new):
         return []
     return (old or []) + (new or [])
 
-Route = Literal["create", "edit", "translate", "restyle", "custom", "ask"]
+Route = Literal["create", "edit", "translate", "custom", "ask"]
 
-#: Routes the graph can actually carry out today. `restyle` is recognised and declined with a
-#: straight answer rather than silently doing something else (deckops backlog item 11).
+#: Routes the graph can carry out. Restyling ("restyle", "rebrand") is an edit: the slides are
+#: redesigned in the template the deck already uses.
 SUPPORTED: set[str] = {"create", "edit", "translate", "custom"}
 
 

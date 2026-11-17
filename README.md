@@ -9,7 +9,7 @@ one people have already edited by hand.
 "make slide 3 more visual; fix the typo on slide 6"      → edit: one task per slide, in parallel
 "turn the right-hand box on slide 8 into a chart"        → edit (redesign of one slide)
 "translate it into French"                               → translate
-"restyle this onto the new template"                     → declined, with the nearest thing offered
+"restyle slide 5" / "rebrand the deck"                   → edit (redesigned in the deck's own template)
 ```
 
 How it works, in one paragraph. **Create:** the facts the deck may state are gathered from your
@@ -248,8 +248,7 @@ template becomes `template`.
 |---|---|
 | there is no deck yet | create |
 | names a language ("into French") | translate |
-| "restyle slide 3" (one slide, same template) | edit |
-| "restyle onto the new template" | declined, with a reason |
+| "restyle slide 3", "rebrand the deck" | edit - redesigned in the deck's own template (no slides named: the rules are unsure, so the model decides) |
 | an editing verb, or slide numbers | edit |
 | anything else, while a deck exists | the model decides |
 

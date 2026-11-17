@@ -13,9 +13,6 @@ Choose exactly one route:
   "create"    a new deck (there is no current deck, or they ask for a new one)
   "edit"      change the current deck: text, slides, structure
   "translate" the same deck in another language
-  "restyle"   the whole deck's content, moved onto a DIFFERENT template. Restyling or
-              redesigning a particular slide inside the deck it is in ("restyle slide 3",
-              "make this slide look different") is "edit", not "restyle"
   "ask"       you cannot tell; ask one short question
 
 Output JSON:
@@ -28,6 +25,8 @@ Rules:
   * "translate ... to X" is "translate", never "edit", even when they also ask for small fixes;
     say so in reason
   * a request naming slides ("slide 3", "the last two") is almost always "edit"
+  * changing how the deck or its slides look - "restyle", "rebrand", "redesign", "more
+    colour" - is "edit": the slides are redesigned in the template the deck already uses
   * be honest about confidence; a low number sends the request back to the person, which is
     much cheaper than rebuilding the wrong deck"""
 
