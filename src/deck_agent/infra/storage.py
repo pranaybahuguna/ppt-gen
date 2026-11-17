@@ -13,7 +13,7 @@ What goes in here:
     <thread>/<run>/plan.json
     <thread>/<run>/ops.json
     <thread>/<run>/previews/slide-01.png
-    kits/<hash>.json              a style kit, keyed by the template's content hash
+    kits/<hash>.json              (legacy) style kits from before the designed path; unused
     uploads/<hash>-<name>.pptx    templates and decks handed in
 
 Deleting any of it goes through `infra/cleanup.py`, which removes a deck's files and its
@@ -54,7 +54,7 @@ def sha256_file(path: str | Path, length: int = 16) -> str:
     """The first `length` hex digits of a file's SHA-256: the content hash used to key templates
     and kits, and to name uploads.
 
-    Called by: the CLI's uploads, cmd_kit, nodes.common.template_fingerprint, tests.
+    Called by: the CLI's uploads, templates.ingest, nodes.common.template_fingerprint, tests.
     """
     h = hashlib.sha256()
     with open(path, "rb") as f:
@@ -124,14 +124,14 @@ class Store:
 
         Called by: Workspace.publish / publish_dir (run artefacts, deck versions), the CLI's
         uploads
-        (templates, context documents, attached decks), cmd_kit.
+        (templates, context documents, attached decks), templates.ingest.
         """
         ...
 
     def put_bytes(self, data: bytes, key: str) -> str:
         """Store bytes at `key`. -> its s3:// URI.
 
-        Called by: put_json, custom_code (the model's code), tests.
+        Called by: put_json, the server's uploads, tests.
         """
         ...
 
@@ -152,7 +152,7 @@ class Store:
     def exists(self, uri: str) -> bool:
         """Whether an object exists.
 
-        Called by: ensure_kit (kit cache lookup), the rebuild check (_template_still_there),
+        Called by:
         cleanup, tests.
         """
         ...
@@ -174,7 +174,7 @@ class Store:
     def delete(self, uris: list[str]) -> int:
         """Delete objects by URI; S3 is asked in batches of a thousand. -> how many were deleted.
 
-        Called by: cleanup.execute, cleanup.keep_only_kit.
+        Called by: cleanup.execute.
         """
         ...
 
@@ -189,8 +189,7 @@ class Store:
     def put_json(self, obj, key: str) -> str:
         """Store an object as indented UTF-8 JSON. -> its URI.
 
-        Called by: Workspace.publish_json (run artefacts), ensure_kit and cmd_kit (kits),
-        custom_code.
+        Called by: Workspace.publish_json (run artefacts), tests.
         """
         import json
         return self.put_bytes(json.dumps(obj, indent=1, ensure_ascii=False).encode(), key)
@@ -198,7 +197,7 @@ class Store:
     def get_json(self, uri: str):
         """Read a JSON object.
 
-        Called by: the nodes that load a kit, plan or stored code context.
+        Called by: the nodes that load a stored JSON artefact.
         """
         import json
         return json.loads(self.get_bytes(uri))
@@ -466,7 +465,7 @@ def store(s: Settings | None = None) -> Store:
     """The process-wide store. `store_backend=memory` avoids needing a container.
 
     Called by: cli._upload_if_local, cli.cmd_clean, cli.cmd_doctor, cli.cmd_get, cli.cmd_init,
-        cli.cmd_kit, cli.cmd_ls, and 16 more; tests/demo.py.
+        cli.cmd_ls, templates.ingest, and most nodes; tests/demo.py.
     """
     global _store
     if _store is None:

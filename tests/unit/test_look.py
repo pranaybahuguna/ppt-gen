@@ -1,8 +1,7 @@
 """The vision review: does what it sees actually reach the repair loop?
 
-The model's *judgement* is checked against a real endpoint in `tests/validate_real_model.py` -
-it found both of this project's real visual defects on the first try, and reported nothing on a
-good deck. What is tested here is the wiring, deterministically: a problem a vision model
+The `look` node now serves the translate route (create and edit are reviewed by revise.review).
+What is tested here is the wiring, deterministically: a problem a vision model
 reports must become a finding, high severity must reach the repair loop, low severity must not,
 and a vision model that fails must not be able to stop a deck going out.
 """
@@ -11,7 +10,6 @@ from __future__ import annotations
 
 import pytest
 
-from deck_agent.engine.build import repair_feedback
 from deck_agent.nodes.common import warnings_of
 from deck_agent.nodes.look import look, review_previews
 from deck_agent.settings import Settings, reset, settings
@@ -88,15 +86,6 @@ def test_an_empty_report_is_believed(previews):
     assert findings == [] and notes == []
 
 
-def test_a_finding_turns_into_feedback_a_model_can_act_on():
-    messages = repair_feedback(
-        [{"kind": "appearance", "slide_index": 2, "what": "the heading is squeezed into a circle",
-          "where": "top left", "severity": "high"}], {"slides": []})
-    assert 2 in messages
-    assert "squeezed into a circle" in messages[2][0]
-    assert "top left" in messages[2][0]
-
-
 def test_the_node_does_nothing_unless_it_is_asked_to(tmp_path):
     reset(Settings(vision_review=False, local_root=str(tmp_path)))
     try:
@@ -130,17 +119,15 @@ def test_what_was_seen_reaches_the_person(offline_settings):
     assert any("legend is small" in w for w in warnings)
 
 
-def test_the_graph_routes_a_vision_finding_to_repair(offline_settings):
-    """The point of the whole thing: something seen must be something fixed."""
+def test_the_graph_routes_a_finding_on_a_translation_to_repair(offline_settings):
+    """Something seen must be something fixed: a translated slide with a problem is repaired."""
     from deck_agent.graph import after_look
 
     state = {
-        "route": "create", "repair_round": 0, "pending_code": [], "code_attempt": 0,
-        "structural": [], "leaked": [], "vision_notes": [],
-        "findings": [{"kind": "appearance", "slide_index": 0, "what": "an empty panel",
-                      "where": "right", "severity": "high"}],
+        "route": "translate", "repair_round": 0, "structural": [], "leaked": [], "vision_notes": [],
+        "findings": [{"kind": "overflow", "slide_index": 0, "ref": "slide:1/shape:2", "ratio": 1.3}],
     }
-    assert after_look(state) == "repair"
+    assert after_look(state) == "translate_repair"
 
     settings().max_repair_rounds = 0          # out of rounds: hand it over and say so
     assert after_look(state) == "deliver"

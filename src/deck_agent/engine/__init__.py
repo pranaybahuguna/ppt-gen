@@ -34,9 +34,7 @@ ENGINE_ROOT = REPO / "engine" / "deckops"
 def bootstrap() -> Path:
     """Put the engine on the import path. Idempotent; safe to call from anywhere.
 
-    Called by: engine.build.build_from_kit, engine.build.compile_plan, engine.deck.apply_ops,
-        engine.deck.changelog, engine.deck.check, engine.deck.move_slide,
-        engine.deck.paragraphs, and 24 more.
+    Called by: engine.deck (every function), nodes.translate, sandbox.render, revise.surgery.
     """
     if not (ENGINE_ROOT / "deckops" / "probe.py").exists():
         raise Boundary(

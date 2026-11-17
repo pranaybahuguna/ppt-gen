@@ -82,28 +82,20 @@ class Settings:
     max_repair_rounds: int = 2
     render_retries: int = 2
     render_workers: int = 4
-    code_attempts: int = 2                      # tries the model gets to write working code
     router_confidence_floor: float = 0.6        # below this the graph asks the user
     approve_outline: bool = False               # pause for a human before building
-    allow_custom_code: bool = False             # the escape hatch, off until asked for
+    review_changes: bool = True                 # a vision model looks at new and changed slides
+    revision_rounds: int = 1                    # ... and sends unhappy ones back this many times
     vision_review: bool = False                 # look at each rendered slide with a vision
                                                 # model and feed what it sees back as findings
     vision_workers: int = 4
     local_root: str = "local"                   # scratch only; nothing of record lives here
     default_template: str = ""                  # object URI used when a create request names no template
-    layout_reuse: int = 0                       # each template layout at most this many times
-                                                # per deck, never twice in a row; slides over it
-                                                # are designed by model-written code instead.
-                                                # 0 = no limit. Needs allow_custom_code.
     server_host: str = "127.0.0.1"              # `deckops serve`: where the MCP + REST server listens
     server_port: int = 8765
     server_url: str = ""                        # how callers reach it, for download links; empty =
                                                 # http://<server_host>:<server_port>
     server_workers: int = 2                     # long operations run at once (one per deck)
-    single_kit: bool = False                    # kits/ holds one kit only: ingesting a template
-                                                # (`deckops kit`) replaces the one there, and a
-                                                # deck made from any other template keeps its kit
-                                                # beside the deck instead. See nodes/kit.py
     keep_versions: int = 0                      # deck versions kept after each turn (the newest
                                                 # N; 2 = undo one step). 0 = keep every version
     tidy_after_turn: bool = False               # after each delivered turn, drop the deck's older
@@ -136,7 +128,7 @@ class Settings:
         """Where per-run scratch directories go (local/workspaces). Never of record; safe to
         delete.
 
-        Called by: infra.workspace, the sandbox clients, cmd_kit, cmd_selftest.
+        Called by: infra.workspace, the sandbox clients, cmd_selftest.
         """
         return self._under("workspaces")
 
@@ -198,7 +190,7 @@ def settings() -> Settings:
 def reset(new: Settings | None = None) -> None:
     """Tests only: swap the process-wide settings.
 
-    Called by: tests/demo.py, tests/validate_real_model.py.
+    Called by: tests/demo.py, the tests' fixtures.
     """
     global _cached
     _cached = new

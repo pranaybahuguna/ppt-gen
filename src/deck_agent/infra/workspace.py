@@ -50,7 +50,7 @@ class Workspace:
     def dir(self, *parts: str) -> Path:
         """A directory inside this run's scratch directory, created.
 
-        Called by: make_previews, ensure_kit, publish_dir.
+        Called by: make_previews, publish_dir, revise.nodes.
         """
         p = self.root.joinpath(*parts)
         p.mkdir(parents=True, exist_ok=True)
@@ -59,7 +59,7 @@ class Workspace:
     # -- object storage ----------------------------------------------------------------
     def key(self, name: str, *, versioned: bool = False) -> str:
         """Where a name lives in the bucket. Run artefacts are namespaced by run; deck
-        versions and kits belong to the thread, because they outlive the run that made them."""
+        versions belong to the thread, because they outlive the run that made them."""
         return f"{self.thread_id}/{name}" if versioned else f"{self.thread_id}/{self.run_id}/{name}"
 
     def fetch(self, uri: str, name: str) -> Path:
@@ -76,7 +76,7 @@ class Workspace:
         """Upload a scratch file to the run folder, or with versioned=True to the deck's own folder
         (where deck versions live). -> its URI, also kept in `published`.
 
-        Called by: publish_version, ensure_kit (a prepared template).
+        Called by: publish_version.
         """
         uri = self.store.put(self.path(name), self.key(as_name or name, versioned=versioned))
         self.published[as_name or name] = uri

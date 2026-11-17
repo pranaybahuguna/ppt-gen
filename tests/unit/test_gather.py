@@ -151,13 +151,12 @@ def test_a_supplied_content_pack_is_used_as_given(offline_settings, planner):
     assert "content_pack" not in out
 
 
-def test_create_goes_through_gather_before_the_kit(offline_settings, template, planner):
-    """With the stub the outline cannot be written, so the run stops there - but the trace
-    shows the order, and the pack it would have written from is in the bucket."""
+def test_create_goes_through_gather_before_the_storyline(offline_settings, template, planner):
+    """The facts come first: the storyline and every slide are written from them."""
     tpl = store().put(template, f"uploads/{sha256_file(template)}-template.pptx")
     doc = store().put_bytes(README.encode(), "uploads/abc-README.md")
     result = facade.create_deck("from-context", "a deck about this pilot", None, tpl,
                                 planner=planner, context=[doc], **QUIET)
     trace = facade.session("from-context")["trace"]
-    assert trace[:4] == ["intake", "route", "gather", "ensure_kit"], trace
-    assert result["ok"] is False and "model" in result["reason"]
+    assert trace[:4] == ["intake", "route", "gather", "storyline"], trace
+    assert result["ok"], result

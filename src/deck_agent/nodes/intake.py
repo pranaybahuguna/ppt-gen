@@ -2,7 +2,7 @@
 
 Every file the caller supplies is checked here with the engine's archive guard and probed
 once, so that from this point on the graph is reasoning about JSON rather than about bytes.
-This is also where a template gets its content hash, which is the kit cache key.
+This is also where a template gets its content hash, recorded with every run.
 
 The guard used to live inside the sandbox, because the sandbox was the trust boundary. In this
 design it runs at the door instead: a zip bomb, an encrypted entry, a path-traversing name or

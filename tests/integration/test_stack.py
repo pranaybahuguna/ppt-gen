@@ -67,6 +67,12 @@ def test_a_missing_object_is_a_clear_failure(needs_stack):
         store.get_bytes(f"s3://{store.bucket}/tests/definitely-not-here.json")
 
 
+FACTS = {"facts": [{"id": "F1", "text": "The pilot answered 38% of tickets without a person."},
+                       {"id": "F2", "text": "Median first response fell from 4 hours to 6 minutes."},
+                       {"id": "F3", "text": "Agents edited one in five drafts before sending."}],
+             "datasets": {}}
+
+
 # --------------------------------------------------------------------------- the checkpointer
 
 def test_a_conversation_survives_a_new_graph_and_a_new_pool(needs_stack, template, scratch_deck, scratch_keys):
@@ -80,13 +86,9 @@ def test_a_conversation_survives_a_new_graph_and_a_new_pool(needs_stack, templat
     template_uri = store.put(template, f"uploads/{sha256_file(template)}-template.pptx")
     scratch_keys.append(Ref.parse(template_uri).key)
 
-    outline = {"title": "T", "footer": "f", "slides": [
-        {"purpose": "p", "kind": "sequence", "title": "How it went",
-         "points": [{"heading": "One", "text": "First."}, {"heading": "Two", "text": "Second."},
-                    {"heading": "Three", "text": "Third."}]}]}
 
-    created = facade.create_deck(deck_id, "a deck", {"facts": [], "datasets": {}}, template_uri,
-                                 planner=planner, log=lambda *a, **k: None, outline=outline)
+    created = facade.create_deck(deck_id, "a deck", FACTS, template_uri,
+                                 planner=planner, log=lambda *a, **k: None)
     assert created["ok"], created
 
     # Every facade call opens its own graph and its own Postgres pool - which is the test.
@@ -115,12 +117,8 @@ def test_an_interrupt_can_be_resumed_by_a_later_call(needs_stack, template, scra
     store = S3Store(needs_stack)
     template_uri = store.put(template, f"uploads/{sha256_file(template)}-template.pptx")
     scratch_keys.append(Ref.parse(template_uri).key)
-    outline = {"title": "T", "footer": "f", "slides": [
-        {"purpose": "p", "kind": "sequence", "title": "How it went",
-         "points": [{"heading": "One", "text": "First."}, {"heading": "Two", "text": "Second."},
-                    {"heading": "Three", "text": "Third."}]}]}
-    facade.create_deck(deck_id, "a deck", {"facts": [], "datasets": {}}, template_uri,
-                       planner=planner, log=lambda *a, **k: None, outline=outline)
+    facade.create_deck(deck_id, "a deck", FACTS, template_uri,
+                       planner=planner, log=lambda *a, **k: None)
 
     asked = facade.ask_deck(deck_id, "do the thing", planner=planner, log=lambda *a, **k: None)
     assert asked["question"]

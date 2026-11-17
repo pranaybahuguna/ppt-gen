@@ -81,7 +81,6 @@ def offline_settings(tmp_path):
         code_runner="off",          # no model-written code
         llm_client="stub",
         local_root=str(tmp_path),
-        allow_custom_code=False,
         # the decks and jobs tables: SQLite in a file of this test's own - same models, same
         # queries, no Postgres needed
         db_url=f"sqlite+aiosqlite:///{tmp_path}/deckops.db",

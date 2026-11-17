@@ -41,7 +41,7 @@ def review_previews(previews: list[Path], planner, context: dict | None = None,
     A preview is named `slide-NN.png`, 1-based, so the slide index is recoverable from the
     filename - the same convention the engine's renderer uses.
 
-    Called by: nodes.edit._look_at_one, look; tests/validate_real_model.py.
+    Called by: look; tests/unit/test_look.py.
     """
     s = settings()
     if not previews:
@@ -102,18 +102,16 @@ def _slide_number(uri: str) -> int:
 
 
 def look(state, planner=None, log=print) -> dict:
-    """Have a vision model look at each rendered slide; high-severity problems become findings.
+    """Have a vision model look at each rendered slide of a translation; high-severity problems
+    become findings for translate_repair.
 
-    Graph node. Runs: after assemble, edit_apply and translate_apply - every build. Returns at
-        once when settings.vision_review is off. Skips slides about to be, or already, reworked
-        by code.
-    Reads: previews, findings, pending_code, code_slides, plan.
+    Graph node. Runs: after translate_apply. Returns at once when settings.vision_review is off.
+    (New and edited slides are looked at by revise.review instead.)
+    Reads: previews, findings.
     Writes: findings (plus what was seen), vision_notes (low severity, reported not acted on);
         errors when there was nothing rendered to look at.
-    Next: graph.after_look -> the route's own decision.
+    Next: graph.after_look -> translate_repair | deliver.
     Called by: LangGraph, registered in graph.build_graph.
-
-    The graph node. Off unless `vision_review` is on; never blocks delivery.
     """
     s = settings()
     if not s.vision_review:
@@ -122,12 +120,6 @@ def look(state, planner=None, log=print) -> dict:
     from .common import workspace
 
     previews = state.get("previews") or []
-    # Slides about to be reworked, or already reworked, are not looked at here: the first are
-    # about to change, and the second were looked at, one by one, when they were reworked.
-    designed = ({p["position"] for p in state.get("pending_code") or [] if p.get("rework")}
-                | {c["position"] for c in state.get("code_slides") or [] if c.get("rework")})
-    if designed:
-        previews = [u for u in previews if _slide_number(u) - 1 not in designed]
     if not previews:
         return {"trace": [step("look", outcome="nothing was rendered")],
                 "errors": [{"kind": "not_looked_at", "message":
@@ -136,31 +128,9 @@ def look(state, planner=None, log=print) -> dict:
 
     with workspace(state) as ws:
         local = [ws.fetch(uri, f"look/{Path(uri).name}") for uri in previews]
-        findings, notes = review_previews(
-            local, planner,
-            {"deck_title": (state.get("plan") or {}).get("title", "")}, log)
+        findings, notes = review_previews(local, planner, {"route": "translate"}, log)
 
-    # The previews are of the whole deck, designed slides included; repair works on the plan,
-    # which has no designed slides in it. Number the findings the way repair will read them,
-    # and keep what was seen on a designed slide as a note - it was looked at when it was drawn.
-    code_slides = state.get("code_slides") or []
-    drawn = sorted({c["position"] for c in code_slides if "position" in c})
-    # A reworked slide is a plan slide in its own position; one added by code (no layout could
-    # hold it) is not in the plan, and the slides after it are one further on.
-    inserted = sorted({c["position"] for c in code_slides
-                       if "position" in c and not c.get("rework")})
-    if drawn:
-        kept = []
-        for f in findings:
-            i = f["slide_index"]
-            if i in drawn:
-                notes.append(f"slide {i + 1}: {f.get('what', f['kind'])}")
-                continue
-            kept.append({**f, "slide_index": i - sum(1 for d in inserted if d < i)})
-        findings = kept
-
-    # Appearance findings join the geometric ones, so the existing decision and repair loop
-    # handle them without knowing where they came from.
+    # Appearance findings join the geometric ones, so the repair decision handles both alike.
     return {
         "findings": [*(state.get("findings") or []), *findings],
         "vision_notes": notes,

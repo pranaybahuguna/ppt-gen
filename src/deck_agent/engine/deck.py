@@ -31,9 +31,7 @@ EXPECT_FIELD = "text_sha"
 def probe(path: str | Path) -> dict:
     """Deck -> index.json. Every box with its id, geometry, font size, text and fingerprint.
 
-    Called by: engine.build.build_from_kit, engine.kitbuild.draft, nodes.create.assemble,
-        nodes.create.render_slides, nodes.create.repair, nodes.custom_code.custom_code,
-        nodes.edit._change_layouts, and 10 more; tests/validate_real_model.py.
+    Called by: nodes.intake.intake, nodes.translate, sandbox.render.render, the server.
     """
     bootstrap()
     from deckops.probe import probe as _probe
@@ -52,14 +50,6 @@ def paragraphs(index: dict, slide_indices: set[int] | None = None) -> list[dict]
     return list(iter_paragraphs(index, slide_indices))
 
 
-def slide_refs(index: dict) -> list[str]:
-    """Every slide's address (`slide:<id>`), in deck order.
-
-    Called by: engine.edits.compile_edit, to check that an action names a slide that exists.
-    """
-    return [s["ref"] for s in index["slides"]]
-
-
 # --------------------------------------------------------------------------- write
 
 def apply_ops(src: str | Path, ops: list[dict], dst: str | Path) -> dict:
@@ -69,8 +59,7 @@ def apply_ops(src: str | Path, ops: list[dict], dst: str | Path) -> dict:
     (usually a fingerprint that no longer matches, i.e. the deck moved under us), so the
     answer is to re-probe and re-plan, never to force it.
 
-    Called by: engine.build.build_from_kit, nodes.edit._change_layouts,
-        nodes.edit._insert_slides, nodes.edit.edit_apply, nodes.translate.translate_apply.
+    Called by: nodes.translate.translate_apply.
     """
     bootstrap()
     from pydantic import ValidationError
@@ -97,9 +86,7 @@ def check(path: str | Path, slide_indices: set[int] | None = None) -> dict:
 
     -> {"findings": [...], "structural": [...]}
 
-    Called by: engine.build.build_from_kit, Baseline.of, nodes.custom_code.custom_code,
-        nodes.edit._change_layouts, nodes.edit._insert_slides, nodes.edit.edit_apply,
-        nodes.translate.translate_apply; tests/validate_real_model.py.
+    Called by: Baseline.of, nodes.translate.translate_apply, revise.work (a tweak's geometry).
     """
     bootstrap()
     from deckops.validate import validate
@@ -130,7 +117,7 @@ class Baseline:
     def of(cls, path: str | Path, slide_indices: set[int] | None = None) -> "Baseline":
         """Run the checks on a deck (or some of its slides) and remember what they found.
 
-        Called by: baseline_for_kit (the template's example slides), edit_apply and translate_apply
+        Called by: translate_apply and revise.work._new_geometry_problems
         (the deck before the change).
         """
         rep = check(path, slide_indices)
@@ -172,8 +159,7 @@ def preserved_count(stats: dict) -> int:
     The engine reports this two ways - `execute()` gives a count, `save_preserving()` gives the
     list of part names - so callers go through here rather than guessing.
 
-    Called by: engine.build.BuildResult.summary, nodes.custom_code.custom_code,
-        nodes.edit.edit_apply, nodes.translate.translate_apply; tests/validate_real_model.py.
+    Called by: nodes.translate.translate_apply.
     """
     value = (stats or {}).get("parts", stats or {}).get("preserved")
     if isinstance(value, int):
@@ -208,7 +194,7 @@ def changelog(index: dict, ops: list[dict]) -> list[dict]:
     Text edits are shown before/after; everything else gets a one-line summary. The engine
     stores text as tagged runs (`<r0>Bonjour</r0>`), so tags are stripped for display.
 
-    Called by: nodes.edit.edit_apply, nodes.translate.translate_apply.
+    Called by: nodes.translate.translate_apply.
     """
     bootstrap()
     from deckops.refs import parse_tagged
@@ -268,8 +254,7 @@ def reseal(src: str | Path, produced: str | Path, dst: str | Path) -> dict:
 
     -> {"preserved": n, "changed": [...], "added": [...], "removed": [...]}
 
-    Called by: nodes.custom_code.custom_code, nodes.edit._replay_code_slides;
-        tests/validate_real_model.py.
+    Called by: revise.nodes.join (after each tweak or drawing); tests/integration/test_sandbox.py.
     """
     bootstrap()
     from pptx import Presentation
@@ -283,56 +268,3 @@ def reseal(src: str | Path, produced: str | Path, dst: str | Path) -> dict:
     return save_preserving(prs, str(src), str(dst))
 
 
-def new_slide_index(before: dict, after: dict) -> int | None:
-    """Which slide in `after` was not in `before`, by slide id rather than by position.
-
-    Needed because code written by a model may put its slide wherever it likes. Assuming it
-    appended produced a genuinely scrambled deck once: the code had inserted its slide in the
-    middle, and the host then moved a different slide - an existing one - to the target
-    position. Identity is the only safe way to find it.
-
-    Called by: nodes.custom_code.custom_code, nodes.edit._change_layouts,
-        nodes.edit._replay_code_slides.
-    """
-    known = {s["ref"] for s in before["slides"]}
-    for i, slide in enumerate(after["slides"]):
-        if slide["ref"] not in known:
-            return i
-    return None
-
-
-def move_slide(src: str | Path, frm: int, to: int, dst: str | Path) -> dict:
-    """Move a slide to another position, byte-preservingly.
-
-    Why this is here: the engine's op language can position a slide built from a *layout*
-    (`add_slide` takes `after`), but a slide copied from an example slide
-    (`add_slide_from_pattern`) is always appended. So "add a risks slide after slide 4" needs
-    one more deterministic step, and this is it - a reorder of `p:sldIdLst`, nothing else,
-    saved through the engine's part-by-part comparison so every slide's own XML is untouched.
-
-    Both indices are 0-based positions in the current order.
-
-    Called by: nodes.custom_code.custom_code, nodes.edit._change_layouts,
-        nodes.edit._insert_slides, nodes.edit._replay_code_slides.
-    """
-    bootstrap()
-    from pptx import Presentation
-
-    from deckops.executor import save_preserving
-
-    prs = Presentation(str(src))
-    lst = prs.slides._sldIdLst
-    entries = list(lst)
-    if not 0 <= frm < len(entries):
-        raise PlanInvalid(f"cannot move slide {frm + 1}: the deck has {len(entries)} slides")
-    to = max(0, min(to, len(entries) - 1))
-    if to == frm:
-        import shutil
-
-        shutil.copy(src, dst)
-        return {"moved": False, "preserved": None}
-    element = entries[frm]
-    lst.remove(element)
-    lst.insert(to, element)
-    stats = save_preserving(prs, str(src), str(dst))
-    return {"moved": True, "from": frm, "to": to, **stats}

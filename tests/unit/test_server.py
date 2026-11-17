@@ -45,7 +45,7 @@ def test_create_returns_a_summary_and_a_download(client, template_uri):
     result = job["result"]
     assert result["ok"] and result["versions"] == 1
     assert result["summary"][0].startswith("create: version 1")
-    assert any("built" in line for line in result["summary"])
+    assert any(line.startswith("new slide: ") for line in result["summary"]), result["summary"]
     assert result["download_url"].endswith("/decks/srv/download")
 
     pptx = client.get("/decks/srv/download")
@@ -58,7 +58,7 @@ def test_an_edit_says_what_changed_and_adds_a_version(client, template_uri):
     r = client.post("/decks/srv/edit?wait=true", json={"instruction": "make slide 2 less wordy"})
     result = r.json()["result"]
     assert result["ok"] and result["versions"] == 2
-    assert any(line.startswith("slide 2: text") for line in result["summary"]), result["summary"]
+    assert any(line.startswith("slide 2: ") for line in result["summary"]), result["summary"]
 
     session = client.get("/decks/srv").json()
     assert len(session["version_urls"]) == 2
@@ -79,7 +79,7 @@ def test_without_wait_a_job_is_returned_and_finishes(client, template_uri):
             break
         time.sleep(0.1)
     assert job["status"] == "done", job
-    assert any("assemble" in line for line in job["log"]), "the job's log shows its progress"
+    assert any("build" in line for line in job["log"]), "the job's log shows its progress"
 
 
 def test_bad_requests_say_what_is_wrong(client):

@@ -6,7 +6,7 @@ requests are obvious ("make me a deck about X" with nothing attached can only be
 is pure cost and a new way to be wrong.
 
 The model is given the request and a *summary* of the session - is there a current deck, is
-there a template, which patterns does its kit have - never the conversation. A router that
+there a template - never the conversation. A router that
 needs the transcript to know which deck is meant is a router built on sand; `state.py` says
 more about why.
 
@@ -33,8 +33,7 @@ def route(state: DeckState, planner=None) -> dict:
         a summary of the session (is there a deck).
     Writes: route, route_reason, route_confidence, route_by, target_lang, slide_scope;
         pending_question when it has to ask.
-    Next: after_route -> gather (create) | edit_plan | translate_plan | custom_code | ask |
-        decline.
+    Next: after_route -> gather (create) | split (edit) | translate_plan | ask | decline.
     Called by: LangGraph, registered in graph.build_graph.
     """
     s = settings()
@@ -82,7 +81,7 @@ def route(state: DeckState, planner=None) -> dict:
 def ask(state: DeckState) -> dict:
     """Stop the run and ask the person one question (LangGraph interrupt).
 
-    Graph node. Runs: when route, gather, ensure_kit or another node sets route='ask'. The
+    Graph node. Runs: when route, gather, storyline or another node sets route='ask'. The
         process may exit here; facade.answer() resumes the thread at this line.
     Reads: pending_question, instruction.
     Writes: answer; instruction (the answer is appended to it); pending_question cleared.
@@ -123,9 +122,9 @@ def after_route(state: DeckState) -> str:
     if chosen == "translate":
         return "translate_plan"
     if chosen == "edit":
-        return "edit_plan"
+        return "split"
     if chosen == "custom":
-        return "custom_code"
+        return "split"                    # a custom slide is an edit: add or draw it
     return "decline"                      # restyle, or anything we do not do yet
 
 

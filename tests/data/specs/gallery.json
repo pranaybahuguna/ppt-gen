@@ -1,0 +1,55 @@
+[
+ {"type": "cover", "title": "Scaling the obsolescence scanner to the whole org",
+  "subtitle": "Why throughput is the constraint, and the plan to lift it tenfold",
+  "meta": "Architecture review · November 2026",
+  "agenda": ["Where we are today", "What limits throughput", "The worker-pool plan", "Risks and next steps"]},
+ {"type": "section", "number": 2, "title": "What limits throughput", "subtitle": "One worker, three minutes a scan"},
+ {"title": "Three quarters of scan time is spent waiting on the database",
+  "rows": [{"weight": 1, "items": [
+    {"span": 5, "piece": "big_number", "value": "73%", "label": "of each scan is database wait",
+     "text": "Measured over 1,200 scans in October."},
+    {"span": 7, "piece": "points", "items": [
+      {"heading": "Queries run one at a time", "text": "Each dependency lookup waits for the previous one to return."},
+      {"heading": "No connection pooling", "text": "Every scan opens and closes its own connection."},
+      {"heading": "Matching is CPU-light", "text": "The matching engine itself takes under 20 seconds per scan."}]}]}]},
+ {"title": "Four options were weighed; the worker pool wins on cost and risk",
+  "rows": [{"weight": 1, "items": [{"span": 12, "piece": "cards", "items": [
+    {"value": "10×", "heading": "Worker pool", "text": "Run 16 scans in parallel on the existing service.", "tone": "accent"},
+    {"value": "3×", "heading": "Query batching", "text": "Batch dependency lookups into one round trip."},
+    {"value": "2×", "heading": "Bigger database", "text": "Scale the instance up; costs double."},
+    {"value": "?", "heading": "Rewrite engine", "text": "Six months of work with uncertain gains."}]}]}]},
+ {"title": "The pool changes how scans run, not what they find",
+  "rows": [{"weight": 1, "items": [{"span": 12, "piece": "compare", "columns": [
+    {"label": "Today", "points": ["One worker takes scans in arrival order", "A slow scan blocks every scan behind it", "Throughput is capped at 20 an hour"]},
+    {"label": "With the pool", "points": ["16 workers share one queue", "A slow scan holds up only its own worker", "Throughput scales until the database is the limit"]}]}]}]},
+ {"title": "Rollout takes one quarter, with a checkpoint every month",
+  "rows": [{"weight": 1, "items": [{"span": 12, "piece": "timeline", "last_is_outcome": true, "items": [
+    {"when": "Week 1", "heading": "Pool of 4", "text": "Behind a flag, on one business unit."},
+    {"when": "Month 1", "heading": "Pool of 8", "text": "All units; database metrics watched daily."},
+    {"when": "Month 2", "heading": "Pool of 16", "text": "Connection pooling switched on first."},
+    {"when": "Month 3", "heading": "Target met", "text": "200+ scans an hour, sustained for two weeks."}]}]},
+   {"height": 0.75, "items": [{"span": 12, "piece": "callout", "label": "Decision", "text": "Approve the pool of 4 pilot for next sprint."}]}]},
+ {"title": "Cost grows linearly while throughput grows tenfold",
+  "rows": [{"weight": 1, "items": [{"span": 12, "piece": "table", "header": ["Option", "Scans / hour", "Monthly cost", "Risk"],
+    "rows": [["Today (1 worker)", "20", "€1,200", "None"], ["Pool of 4", "80", "€1,900", "Low"],
+             ["Pool of 8", "160", "€2,700", "Low"], ["Pool of 16", "320", "€4,300", "Medium: database load"]],
+    "highlight_row": 3}]}],
+  "footnote": "Costs include compute and the database read replica."},
+ {"title": "What the review board asked us to keep in mind",
+  "rows": [{"weight": 1, "items": [{"span": 12, "piece": "statement",
+    "text": "Throughput is a means; the goal is that no team waits more than a day to learn which of its dependencies are obsolete.",
+    "by": "Architecture review board, October 2026"}]}]},
+ {"title": "Most quick wins are in the database, not the engine",
+  "rows": [{"weight": 1, "items": [{"span": 12, "piece": "matrix", "x_axis": "Effort", "y_axis": "Impact", "highlight": 0,
+    "quadrants": [{"heading": "Do now", "text": "Worker pool, connection pooling."},
+                  {"heading": "Plan", "text": "Read replica for lookups."},
+                  {"heading": "Maybe", "text": "Cache popular dependency trees."},
+                  {"heading": "Avoid", "text": "Rewrite the matching engine."}]}]}]},
+ {"title": "Throughput climbs with each pool size until the database saturates",
+  "rows": [{"weight": 1, "items": [
+    {"span": 8, "piece": "chart", "kind": "line", "heading": "Scans per hour by month",
+     "categories": ["Jul", "Aug", "Sep", "Oct", "Nov", "Dec"],
+     "series": [{"name": "Measured", "values": [20, 22, 21, 80, 160, 290]}, {"name": "Target", "values": [200, 200, 200, 200, 200, 200]}]},
+    {"span": 4, "piece": "points", "numbered": true, "items": [
+      {"text": "Pool of 4 went live in October."}, {"text": "Pool of 8 doubled it in November."}, {"text": "December's pool of 16 is near the database ceiling."}]}]}]}
+]

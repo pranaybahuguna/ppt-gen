@@ -70,9 +70,8 @@ logs:  ## follow the services' logs
 
 # `local/` is scratch, but not all of it. Three things in there are depended on and are NOT
 # removed: the metric-compatible fonts the overflow predictor measures with (`make fonts`),
-# the sample decks the tests use (`make samples`), and anything under local/templates, which
-# is where a prepared template and its kit live - a kit addresses shapes by id, so the file it
-# was built from is not scrap. Everything else is run output and can go at any time; nothing
+# the sample decks the tests use (`make samples`), and anything under local/templates, where
+# local copies of templates are kept. Everything else is run output and can go at any time; nothing
 # of record is kept outside object storage.
 # What to KEEP, not what to delete. Listing the things to remove cannot work: run output and
 # one-off directories appear under local/ all the time, and the first version of this target
@@ -108,7 +107,7 @@ clean-tests:  ## decks and objects left behind by interrupted test runs (CONFIRM
 	@$(PY) -m deck_agent.cli clean --tests --orphans $(YES)
 
 .PHONY: clean-all
-clean-all:  ## every deck, session, kit and upload (CONFIRM=1)
+clean-all:  ## every deck, session and upload (CONFIRM=1)
 	@$(PY) -m deck_agent.cli clean --all $(YES)
 
 .PHONY: init

@@ -318,30 +318,6 @@ def tidy_session(store: Store, saver, deck_id: str) -> dict:
     return execute(store, saver, plan_tidy(store, saver, deck_id))
 
 
-def keep_only_kit(store: Store, template_id: str) -> dict:
-    """Make `kits/<template_id>.json` the only kit, for `single_kit`.
-
-    Each other kit goes with the template it was built from (`uploads/<its hash>-*`): a kit
-    addresses that file's shape ids and is useless without it, and the template is useless to
-    a builder without its kit. Other uploads - decks people attached - are not touched.
-
-    Decks already built from a removed kit keep their files and stay editable as decks; what
-    they lose is a rebuild from their template (a layout change asks for one), which says so.
-
-    Called by: cli.cmd_kit.
-    """
-    removed_kits, removed_templates = [], []
-    for o in store.objects("kits/"):
-        other = o.key[len("kits/"):].removesuffix(".json")
-        if other == template_id:
-            continue
-        removed_kits.append(o.uri)
-        removed_templates += [u.uri for u in store.objects(f"uploads/{other}-")]
-    if removed_kits or removed_templates:
-        store.delete(removed_kits + removed_templates)
-    return {"removed_kits": removed_kits, "removed_templates": removed_templates}
-
-
 def parse_age(text: str) -> float:
     """`7d`, `12h`, `30m` -> seconds.
 
@@ -356,5 +332,4 @@ def parse_age(text: str) -> float:
 
 __all__ = ["Plan", "inventory", "plan_purge", "plan_tidy", "plan_tidy_all", "plan_orphans",
            "plan_older_than", "plan_everything", "execute", "tidy_session", "parse_age",
-           "keep_only_kit",
            "referenced", "thread_ids", "Ref"]

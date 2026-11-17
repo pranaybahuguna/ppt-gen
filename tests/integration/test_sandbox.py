@@ -8,10 +8,12 @@ fenced in and the claim in `sandbox/__init__.py` is false.
 from __future__ import annotations
 
 
+import zipfile
+
 import pytest
 
 from deck_agent.engine import deck
-from deck_agent.sandbox.code import CONTRACT, run_builder
+from deck_agent.sandbox.code import run_builder
 from deck_agent.sandbox.docker import read_result, run_container
 from deck_agent.sandbox.render import render
 from deck_agent.settings import Settings
@@ -169,59 +171,32 @@ def test_a_slide_drawn_by_code_leaves_every_other_slide_byte_identical(live, sam
         assert before.read(name) == after.read(name), f"{name} was rewritten by the code path"
 
 
-def test_the_contract_the_model_is_given_matches_what_the_harness_provides(live, template, code_ctx):
-    """A prompt that promises something the runtime does not provide is a silent trap."""
-    for key in ("slide_size", "style", "content", "insert_after", "blank_layout"):
-        assert f'ctx["{key}"]' in CONTRACT, f"the contract does not mention ctx[{key!r}]"
+def test_a_tweak_changes_one_slide_and_the_join_keeps_the_rest(live, template, tmp_path):
+    """The edit route's code path, for real: model-written code (here, fixed) retitles one slide
+    in the container, and every other slide of the deck keeps its bytes."""
+    from deck_agent.design.profile import extract_profile
+    from deck_agent.revise.work import tweak
 
-    reads_everything = (
-        "def build(prs, ctx):\n"
-        "    assert set(ctx) >= {'slide_size', 'style', 'content', 'insert_after', 'blank_layout'}\n"
-        "    assert 'palette' in ctx['style'] and 'font' in ctx['style']\n"
-        "    prs.slides.add_slide(prs.slide_layouts[ctx['blank_layout']])\n")
-    result = run_builder(reads_everything, code_ctx, template, s=live)
-    assert result.ok, result.problems
+    retitle = ("def build(prs, ctx):\n"
+               "    slide = prs.slides[ctx['slide_index']]\n"
+               "    for sh in slide.shapes:\n"
+               "        if sh.has_text_frame and sh.text_frame.text.strip():\n"
+               "            sh.text_frame.paragraphs[0].runs[0].text = 'Retitled by code'\n"
+               "            break\n")
 
+    class Fixed:
+        vision = False
 
-def test_slides_over_the_layout_budget_are_designed_in_the_sandbox(needs_sandbox, template,
-                                                                    tmp_path, planner):
-    """End to end, offline planner, real container: four slides that all want one layout.
+        def tweak_slide(self, payload, png=None):
+            return {"code": retitle, "explanation": "retitled"}
 
-    With a budget of one use per layout, the slides over it are reworked by code in place,
-    each still where its content belongs.
-    """
-    from deck_agent import facade
-    from deck_agent import settings as settings_module
-    from deck_agent.infra import checkpointer, storage
-    from deck_agent.infra.storage import sha256_file, store
-    from tests.unit.test_graph import CONTENT, OUTLINE
-
-    s = Settings(store_backend="memory", checkpointer="memory", render_backend="off",
-                 code_runner="docker", llm_client="stub", local_root=str(tmp_path),
-                 allow_custom_code=True, layout_reuse=1)
-    settings_module.reset(s)
-    storage.reset(storage.MemoryStore(s.s3_bucket))
-    checkpointer.reset_memory()
-    try:
-        step = OUTLINE["slides"][1]
-        outline = {**OUTLINE, "slides": [OUTLINE["slides"][0]] + [
-            {**step, "title": f"Step group {n}"} for n in (1, 2, 3)]}
-        tpl = store().put(template, f"uploads/{sha256_file(template)}-template.pptx")
-        result = facade.create_deck("designed", "pilot", CONTENT, tpl, planner=planner,
-                                    outline=outline, log=lambda *a, **k: None)
-        assert result["ok"], result
-        drawn = [c for c in result["changelog"] if c["change"].startswith("designed slide")]
-        assert drawn, result["changelog"]
-        assert all("keeps its template layout" not in w for w in result["warnings"]), \
-            "every over-budget slide was reworked"
-
-        local = store().get(result["deck"], tmp_path / "out.pptx")
-        titles = [deck.probe(local)["slides"][i] for i in range(4)]
-        texts = [" ".join(p["text"] for sh in sl["shapes"] for p in sh.get("paras", []))
-                 for sl in titles]
-        assert "Step group 1" in texts[1] and "Step group 2" in texts[2] \
-            and "Step group 3" in texts[3], "each designed slide sits where its content belongs"
-    finally:
-        settings_module.reset(None)
-        storage.reset(None)
-        checkpointer.reset_memory()
+    task = {"id": "t1", "kind": "tweak", "slide": 2, "instruction": "retitle slide 2", "round": 0}
+    result = tweak(task, template, extract_profile(template), Fixed(), tmp_path / "w")
+    assert result["ok"], result["problems"]
+    ran = run_builder(result["code"], result["ctx"], template, s=live)
+    sealed = tmp_path / "sealed.pptx"
+    deck.reseal(template, ran.deck, sealed)
+    before, after = zipfile.ZipFile(template), zipfile.ZipFile(sealed)
+    changed = [n for n in before.namelist() if n.startswith("ppt/slides/slide") and n.endswith(".xml")
+               and before.read(n) != after.read(n)]
+    assert len(changed) == 1, changed

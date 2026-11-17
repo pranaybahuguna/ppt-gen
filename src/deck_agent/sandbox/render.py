@@ -48,8 +48,8 @@ def render(pptx: str | Path, outdir: str | Path, pages: list[int] | None = None,
            dpi: int = 60, s: Settings | None = None) -> RenderResult:
     """Render `pages` (0-based slide indices; None = all) as PNGs into `outdir`.
 
-    Called by: cli.cmd_kit, engine.kitbuild._vision_compare, nodes.common.make_previews,
-        nodes.edit._look_at_one, nodes.kit.ensure_kit; tests/validate_real_model.py.
+    Called by: nodes.common.make_previews, revise.work.slide_picture,
+        revise.nodes._before_pictures, cli.cmd_design.
     """
     s = s or settings()
     pptx, outdir = Path(pptx).resolve(), Path(outdir).resolve()

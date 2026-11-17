@@ -39,9 +39,9 @@ def test_the_graph_compiles_and_every_edge_has_a_destination():
     compiled = build_graph().compile()
     graph = compiled.get_graph()
     names = {n for n in graph.nodes}
-    for node in ("intake", "route", "ask", "decline", "ensure_kit", "outline", "render_slides",
-                 "assemble", "repair", "translate_plan", "translate_apply", "translate_repair",
-                 "edit_plan", "edit_apply", "custom_code", "deliver"):
+    for node in ("intake", "route", "ask", "decline", "gather", "storyline", "approve_outline",
+                 "write", "build", "split", "work", "join", "review", "translate_plan",
+                 "translate_apply", "translate_repair", "look", "deliver"):
         assert node in names, f"{node} is missing from the graph"
     assert "flowchart" in mermaid() or "graph TD" in mermaid()
 
@@ -79,8 +79,7 @@ def test_the_session_knows_which_deck_is_current(offline_settings, uploaded_temp
     assert state["exists"] is True
     assert state["has_current_deck"] is True
     assert state["deck"] == state["versions"][-1]
-    assert state["kit_patterns"], "the kit's patterns should be in the state for cheap decisions"
-    assert "ensure_kit" in state["trace"]
+    assert "storyline" in state["trace"] and "build" in state["trace"]
 
 
 def test_undo_drops_the_last_version_and_keeps_the_file(offline_settings, uploaded_template, planner):
@@ -137,28 +136,6 @@ def test_create_with_no_template_asks_for_one(offline_settings, planner):
     assert "template" in (answer.get("question") or answer.get("reason") or "").lower()
 
 
-def test_the_kit_is_built_once_and_then_reused(offline_settings, uploaded_template, planner):
-    """The cache key is the template's content hash, shared across sessions."""
-    builds = []
-    import deck_agent.nodes.kit as kit_node
-
-    original = kit_node.build_kit
-
-    def counting(*args, **kwargs):
-        builds.append(1)
-        return original(*args, **kwargs)
-
-    kit_node.build_kit = counting
-    try:
-        facade.create_deck("session-a", "a deck", CONTENT, uploaded_template, planner=planner,
-                           log=lambda *a, **k: None, outline=OUTLINE)
-        facade.create_deck("session-b", "another deck", CONTENT, uploaded_template,
-                           planner=planner, log=lambda *a, **k: None, outline=OUTLINE)
-    finally:
-        kit_node.build_kit = original
-    assert len(builds) == 1, "the second session should have reused the cached kit"
-
-
 def test_every_run_leaves_a_manifest_that_explains_it(offline_settings, uploaded_template, planner):
     deck_id = "test-manifest"
     created = facade.create_deck(deck_id, "a deck", CONTENT, uploaded_template, planner=planner,
@@ -166,30 +143,6 @@ def test_every_run_leaves_a_manifest_that_explains_it(offline_settings, uploaded
     manifest = store().get_json(created["manifest"])
     assert manifest["route"] == "create"
     assert manifest["engine"]["commit"], "a delivered deck must say which engine built it"
-    assert manifest["kit"] and manifest["template_id"]
-    assert [entry["node"] for entry in manifest["trace"]][:4] == ["intake", "route", "gather", "ensure_kit"]
+    assert manifest["template"] and manifest["template_id"]
+    assert [entry["node"] for entry in manifest["trace"]][:4] == ["intake", "route", "gather", "storyline"]
     assert manifest["settings"]["render_backend"] == "off"
-
-
-def test_a_template_with_no_usable_layouts_is_not_cached(offline_settings, uploaded_template, planner):
-    """Caching a failure is worse than caching nothing.
-
-    The cache is keyed by the template's content hash, so an empty kit written there would be
-    handed back for ever - including after the reason it failed has been fixed. A real
-    commercial template produced exactly this: zero patterns, and an empty kit cached under its
-    hash until it was deleted by hand.
-    """
-    import deck_agent.nodes.kit as kit_node
-
-    original = kit_node.build_kit
-    kit_node.build_kit = lambda *a, **k: ({"name": "x", "patterns": {}}, {"draft_notes": "none"})
-    try:
-        out = kit_node.ensure_kit({"thread_id": "t", "run_id": "r", "template": uploaded_template},
-                                  planner=planner, log=lambda *a, **k: None)
-    finally:
-        kit_node.build_kit = original
-
-    assert out["route"] == "decline"
-    assert "kit" not in out, "a kit with no patterns must not be recorded as this deck's kit"
-    assert store().list("kits/") == [], "nothing should have been cached"
-    assert out["errors"][0]["kind"] == "no_patterns"

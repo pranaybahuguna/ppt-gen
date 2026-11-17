@@ -216,7 +216,9 @@ class OpenAICompatPlanner:
                 reply = json.load(r)
         except urllib.error.HTTPError as e:
             detail = e.read().decode(errors="replace")[:600]
-            if e.code == 400 and "temperature" in detail and self.send_temperature:
+            # Judge by what this request sent, not the shared flag: calls run in parallel, and
+            # the first refusal turns the flag off while the others are still in flight.
+            if e.code == 400 and "temperature" in detail and "temperature" in body:
                 self.send_temperature = False
                 return self._post(messages)
             raise RuntimeError(f"model endpoint answered {e.code}: {detail}") from None

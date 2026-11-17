@@ -10,7 +10,7 @@ Three things are published here, and the third is the one that is easy to skip:
   costs someone their credibility in a meeting.
 
 The manifest is written to the bucket next to the deck, so a run can be explained later from
-the artefacts alone: which engine commit, which kit, which route, which path through the
+the artefacts alone: which engine commit, which template, which route, which path through the
 graph, what the model was asked and answered.
 """
 from __future__ import annotations
@@ -27,7 +27,7 @@ def deliver(state: DeckState, log=print) -> dict:
 
     Graph node. Runs: last on every successful route.
     Reads: deck_versions, previews, changelog, errors, findings and notes (as warnings), trace,
-        route details, kit and template, code_slides, run and thread ids.
+        route details, template, the storyline or edit tasks, run and thread ids.
     Writes: delivered = {ok, deck, url, previews, warnings, changelog, route, versions,
         manifest}.
     Next: END.
@@ -48,22 +48,21 @@ def deliver(state: DeckState, log=print) -> dict:
         "route_by": state.get("route_by"),
         "route_confidence": state.get("route_confidence"),
         "engine": engine_version(),
-        "kit": state.get("kit"),
         "template": state.get("template"),
         "template_id": state.get("template_id"),
         "deck": deck,
         "versions": state.get("deck_versions"),
         "previews": state.get("previews"),
-        "slides": len((state.get("plan") or {}).get("slides") or []) or None,
+        "storyline": (state.get("story") or {}).get("title") if state.get("route") == "create" else None,
         "changelog": state.get("changelog"),
         "warnings": warnings,
         "errors": errors,
-        "code_slides": state.get("code_slides"),
+        "edit_tasks": state.get("edit_tasks") if state.get("route") == "edit" else None,
         "repair_rounds": state.get("repair_round"),
         "trace": state.get("trace"),
         "settings": {k: v for k, v in s.redacted().items()
                      if k in ("render_backend", "code_runner", "checkpointer", "store_backend",
-                              "llm_client", "allow_custom_code", "max_repair_rounds")},
+                              "llm_client", "review_changes", "revision_rounds")},
     }
     manifest_uri = None
     if deck:

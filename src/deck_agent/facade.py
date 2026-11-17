@@ -119,7 +119,7 @@ def _invoke(deck_id: str, payload: dict, planner=None, log=print, s: Settings | 
     """Run one turn of a deck's conversation through the graph and return the result.
 
     On a new deck_id it builds a fresh state (state.new_state); on an existing one it resets the
-    per-turn fields (state.turn_reset) and keeps the deck, kit and plan. Stops early with a
+    per-turn fields (state.turn_reset) and keeps the deck, its template and storyline. Stops early with a
     question when the graph interrupts. Afterwards, with tidy_after_turn on, tidies the deck.
 
     Called by: create_deck, edit_deck, translate_deck, ask_deck.
@@ -211,7 +211,7 @@ def answer(deck_id: str, text: str, planner=None, log=print, s: Settings | None 
 # --------------------------------------------------------------------------- the session
 
 def session(deck_id: str, planner=None, s: Settings | None = None) -> dict:
-    """What this session knows: which deck, how many versions, which template and kit.
+    """What this session knows: which deck, how many versions, which template.
 
     Called by: cli.cmd_session; tests/demo.py.
     """
@@ -224,6 +224,7 @@ def session(deck_id: str, planner=None, s: Settings | None = None) -> dict:
         return {"exists": True, "deck_id": deck_id, **summarise(values),
                 "deck": (values.get("deck_versions") or [None])[-1],
                 "versions": values.get("deck_versions") or [],
+                "template": values.get("template"),
                 "pending_question": values.get("pending_question"),
                 "next_nodes": list(snapshot.next or ()),
                 "trace": [t.get("node") for t in values.get("trace") or []]}

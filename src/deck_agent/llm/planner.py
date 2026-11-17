@@ -1,22 +1,20 @@
 """The model layer: one object, every model call.
 
-The engine already defines the shape of this: a "planner" with methods like `outline`,
-`render_slide`, `translate` and `label_slide`, and two implementations - an offline stub and an
-OpenAI-compatible HTTP client. Keeping that interface means the engine's own two-stage
-generation and kit-building code works unchanged.
+It subclasses the engine's OpenAI-compatible client, so JSON mode, ```json fence tolerance, the
+retry-without-temperature quirk and pictures for vision calls are inherited, not reimplemented.
 
-This module adds the three calls the agent layer needs (`route`, `plan_edit`,
-`write_slide_code`) by *subclassing* the engine's clients, so the JSON-mode handling, the
-```json fence tolerance, the retry-without-temperature quirk and the vision support are all
-inherited rather than reimplemented.
+The calls, by route:
+  every turn   route (only when the rules are unsure)
+  create       gather, storyline, slide_spec
+  edit         split_edit, redesign_slide, tweak_slide, draw_slide
+  both         review_changes (the changed or new slides, as pictures)
+  translate    translate and shorten (the engine's own), review_slide (look)
 
 Three planners:
 
-* `AgentPlanner`    - the engine's HTTP client plus the three new calls. The real one.
-* `StubAgentPlanner`- offline and deterministic: rule-based routing, a rule-based stage 2 (the
-                      engine's), and a *working* hand-written python-pptx builder for the code
-                      path. The entire graph, escape hatch included, runs with no model at all,
-                      which is what makes the tests meaningful.
+* `AgentPlanner`    - the real one, over HTTP.
+* `StubAgentPlanner`- offline and deterministic: rule-based routing and simple, working answers
+                      for every call, so the whole graph runs in tests with no model at all.
 * `LangChainPlanner`- the same prompts sent through `langchain-openai`, for tracing and
                       provider switching. Opt in with `llm_client=langchain`.
 """
@@ -27,7 +25,7 @@ import re
 
 from ..engine import bootstrap
 from ..settings import Settings, settings
-from .prompts import CODE_SYSTEM, EDIT_SYSTEM, GATHER_SYSTEM, REVIEW_SYSTEM, ROUTE_SYSTEM
+from .prompts import GATHER_SYSTEM, REVIEW_SYSTEM, ROUTE_SYSTEM
 
 bootstrap()
 from controlplane.planner import OpenAICompatPlanner, RecordedVision, StubPlanner  # noqa: E402,F401
@@ -52,27 +50,65 @@ class AgentPlanner(OpenAICompatPlanner):
         return self._chat(GATHER_SYSTEM, json.dumps(
             {"request": request, "sources": sources}, ensure_ascii=False))
 
-    def plan_edit(self, instruction: str, slides: list[dict], context: dict | None = None) -> dict:
-        """Ask the model to turn an edit request into typed actions (EDIT_SYSTEM). -> {actions,
-        cannot}
+    def storyline(self, payload: dict) -> dict:
+        """Facts in, the deck's argument out: action titles, a visual and cited facts per slide.
 
-        Called by: nodes.edit.edit_plan.
+        Called by: design.plan.storyline.
         """
-        return self._chat(EDIT_SYSTEM, json.dumps(
-            {"instruction": instruction, "deck": slides, "session": context or {}}, ensure_ascii=False))
+        from ..design.prompts import STORYLINE_SYSTEM
 
-    def write_slide_code(self, contract: str, content: dict, style: dict, ctx: dict,
-                         feedback: list[str] | None = None, previous: str | None = None) -> dict:
-        """Ask the model for python-pptx code that reworks or draws one slide (CODE_SYSTEM with the
-        sandbox contract). With feedback, the previous code and what was wrong go with it.
-        -> {code, form, explanation}
+        return self._chat(STORYLINE_SYSTEM, json.dumps(payload, ensure_ascii=False))
 
-        Called by: nodes.custom_code.custom_code (first drafts in parallel, then retries).
+    def slide_spec(self, payload: dict) -> dict:
+        """One slide's plan in, its spec out (words and pieces, no coordinates).
+
+        Called by: design.plan.write_spec, once per content slide (in parallel), and again with
+        `feedback` when the spec failed a check.
         """
-        msg = {"content": content, "style": style, "ctx_example": ctx}
-        if feedback:
-            msg["feedback"], msg["previous_code"] = feedback, previous
-        return self._chat(CODE_SYSTEM.format(contract=contract), json.dumps(msg, ensure_ascii=False))
+        from ..design.prompts import SPEC_SYSTEM
+        from ..design.spec import catalog
+
+        return self._chat(SPEC_SYSTEM.format(catalog=catalog()), json.dumps(payload, ensure_ascii=False))
+
+    def _maybe_images(self, system: str, payload: dict, images: list[bytes]) -> dict:
+        """A JSON call, with pictures when there are any and the model can see."""
+        text = json.dumps(payload, ensure_ascii=False)
+        if images and getattr(self, "vision", True):
+            return self._chat_images(system, text, images)
+        return self._chat(system, text)
+
+    def split_edit(self, payload: dict) -> dict:
+        """A request about a deck -> independent per-slide tasks. Called by: revise.nodes.split."""
+        from ..revise.prompts import SPLIT_SYSTEM
+
+        return self._chat(SPLIT_SYSTEM, json.dumps(payload, ensure_ascii=False))
+
+    def redesign_slide(self, payload: dict, png: bytes | None = None) -> dict:
+        """One slide's content + picture + request -> a new spec. Called by: revise.work.redesign."""
+        from ..design.spec import catalog
+        from ..revise.prompts import REDESIGN_SYSTEM
+
+        return self._maybe_images(REDESIGN_SYSTEM.format(catalog=catalog()), payload, [png] if png else [])
+
+    def tweak_slide(self, payload: dict, png: bytes | None = None) -> dict:
+        """One slide's shapes + picture + request -> python-pptx code. Called by: revise.work.tweak."""
+        from ..revise.prompts import TWEAK_SYSTEM
+
+        return self._maybe_images(TWEAK_SYSTEM.format(), payload, [png] if png else [])
+
+    def draw_slide(self, payload: dict, png: bytes | None = None) -> dict:
+        """One slide's content + shapes + picture -> code that redraws its content area.
+        Called by: revise.work.tweak in draw mode."""
+        from ..revise.prompts import DRAW_SYSTEM
+
+        return self._maybe_images(DRAW_SYSTEM.format(), payload, [png] if png else [])
+
+    def review_changes(self, payload: dict, pngs: list[bytes]) -> dict:
+        """Pictures of the changed slides + what was asked -> per-slide problems.
+        Called by: revise.nodes.review."""
+        from ..revise.prompts import REVIEW_SYSTEM
+
+        return self._maybe_images(REVIEW_SYSTEM, payload, pngs)
 
     def review_slide(self, png: bytes, context: dict | None = None) -> dict:
         """Look at a rendered slide and say what a person would notice. -> {"ok", "problems"}
@@ -86,73 +122,6 @@ class AgentPlanner(OpenAICompatPlanner):
 
 
 # ---------------------------------------------------------------- offline
-
-#: The stub's answer for the code path. It is real, working python-pptx: a row of panels with a
-#: heading and a line of text in each, drawn from ctx["style"]. Having a *correct* canned answer
-#: means the escape hatch is exercised end to end by the tests - container, reseal, checks and
-#: all - with no model in the loop.
-STUB_SLIDE_CODE = '''
-from pptx.util import Emu, Pt
-from pptx.dml.color import RGBColor
-
-
-def _rgb(hexc):
-    return RGBColor.from_string((hexc or "222222").lstrip("#")[:6].upper())
-
-
-def build(prs, ctx):
-    w, h = ctx["slide_size"]["w"], ctx["slide_size"]["h"]
-    style = ctx["style"]
-    content = ctx["content"]
-    margin = int(w * 0.06)
-    top, box_h = int(h * 0.32), int(h * 0.42)
-    if ctx.get("target_slide") is not None:
-        # rework in place: keep title, page and frame art; clear the old layout's content
-        slide = prs.slides[ctx["target_slide"]]
-        content_ids = {s["id"] for s in ctx.get("shapes") or [] if s["role"] == "content"}
-        for sh in list(slide.shapes):
-            if sh.shape_id in content_ids:
-                sh._element.getparent().remove(sh._element)
-        box = ctx["body_box"]
-        margin, top, box_h = box["x"], box["y"] + int(box["h"] * 0.1), int(box["h"] * 0.7)
-        w = box["x"] * 2 + box["w"]
-    else:
-        slide = prs.slides.add_slide(prs.slide_layouts[ctx.get("blank_layout", 6)])
-        title = slide.shapes.add_textbox(Emu(margin), Emu(int(h * 0.08)),
-                                         Emu(w - 2 * margin), Emu(int(h * 0.14)))
-        tf = title.text_frame
-        tf.word_wrap = True
-        tf.text = content.get("title", "")
-        run = tf.paragraphs[0].runs[0]
-        run.font.size = Pt(style.get("title_pt", 28))
-        run.font.bold = True
-        run.font.name = style.get("font", "Calibri")
-        run.font.color.rgb = _rgb(style.get("text_colour"))
-
-    items = (content.get("points") or [])[:4]
-    if not items:
-        return
-    gap = int(w * 0.02)
-    box_w = (w - 2 * margin - gap * (len(items) - 1)) // len(items)
-    palette = style.get("palette") or ["3B82F6"]
-    for i, item in enumerate(items):
-        x = margin + i * (box_w + gap)
-        panel = slide.shapes.add_textbox(Emu(x), Emu(top), Emu(box_w), Emu(box_h))
-        body = panel.text_frame
-        body.word_wrap = True
-        body.text = item.get("heading", "")
-        p0 = body.paragraphs[0].runs[0]
-        p0.font.size = Pt(style.get("body_pt", 14) + 2)
-        p0.font.bold = True
-        p0.font.name = style.get("font", "Calibri")
-        p0.font.color.rgb = _rgb(palette[i % len(palette)])
-        para = body.add_paragraph()
-        r = para.add_run()
-        r.text = item.get("text", "")
-        r.font.size = Pt(style.get("body_pt", 14))
-        r.font.name = style.get("font", "Calibri")
-        r.font.color.rgb = _rgb(style.get("text_colour"))
-'''
 
 #: Words that decide a route without a model. Order matters: translate wins over edit, because
 #: "translate slide 3 into French" names a slide but is not an edit.
@@ -184,6 +153,74 @@ class StubAgentPlanner(StubPlanner):
     name = "stub (offline, deterministic)"
     vision = False
 
+    # ---- the create route, offline: facts in groups of three, a varied visual for each -----
+
+    VISUALS = ("points", "cards", "statement")
+
+    def storyline(self, payload: dict) -> dict:
+        """One content slide per three facts (at most six), each titled by its first fact."""
+        facts = payload.get("facts") or []
+        groups = [facts[i:i + 3] for i in range(0, min(len(facts), 18), 3)]
+        slides = []
+        for k, g in enumerate(groups):
+            words = g[0]["text"].rstrip(".").split()
+            title = " ".join(words[:12]) if len(words) >= 4 else f"Point {k + 1} of the story told here"
+            slides.append({"type": "content", "section": "Overview", "title": title[:80],
+                           "job": "state these facts", "visual": self.VISUALS[k % len(self.VISUALS)],
+                           "facts": [f["id"] for f in g]})
+        request = (payload.get("request") or "A deck").strip()
+        return {"title": " ".join(request.split()[:8]), "subtitle": "Built offline from the facts given",
+                "sections": ["Overview"], "slides": slides}
+
+    def slide_spec(self, payload: dict) -> dict:
+        """The slide's facts, shown with the visual the storyline chose."""
+        plan, facts = payload.get("slide") or {}, payload.get("facts") or []
+        texts = [f["text"][:130] for f in facts] or [plan.get("job") or "A point"]
+        visual = plan.get("visual")
+        if visual == "statement":
+            rows = [{"weight": 1, "items": [{"span": 12, "piece": "statement", "text": texts[0][:200]}]}]
+        elif visual == "cards" and len(texts) >= 2:
+            rows = [{"weight": 1, "items": [{"span": 12, "piece": "cards", "items": [
+                        {"heading": " ".join(t.split()[:3])[:30], "text": t} for t in texts]}]},
+                    {"height": 0.75, "items": [{"span": 12, "piece": "callout", "text": texts[0][:100]}]}]
+        else:
+            while len(texts) < 2:
+                texts.append(plan.get("title") or "More to follow")
+            rows = [{"weight": 1, "items": [{"span": 12, "piece": "points",
+                                             "items": [{"text": t} for t in texts[:5]]}]}]
+        return {"type": "content", "title": (plan.get("title") or "Slide")[:90], "rows": rows,
+                "notes": "Written offline from the facts."}
+
+    # ---- the edit route, offline: enough to drive split -> work -> join -> review ----------
+
+    def split_edit(self, payload: dict) -> dict:
+        """Every slide number named in the request becomes a redesign task (slide 1 if none)."""
+        n = len(payload.get("deck") or [])
+        named = _slide_numbers(payload.get("request") or "")
+        slides = [s for s in named if 1 <= s <= n] or ([1] if n else [])
+        return {"tasks": [{"kind": "redesign", "slide": s, "instruction": payload.get("request") or ""}
+                          for s in dict.fromkeys(slides)], "summary": "offline split"}
+
+    def redesign_slide(self, payload: dict, png: bytes | None = None) -> dict:
+        """The slide's own texts, shortened, as a list of points under its title."""
+        slide = payload.get("slide") or {"title": (payload.get("request") or "New slide")[:60], "texts": []}
+        texts = [" ".join(t["text"].split()[:12]) for t in slide.get("texts") or [] if t.get("text")][:5]
+        while len(texts) < 2:
+            texts.append(slide.get("title") or "More to follow")
+        return {"type": "content", "title": (slide.get("title") or "Slide")[:90],
+                "rows": [{"weight": 1, "items": [{"span": 12, "piece": "points",
+                                                  "items": [{"text": t} for t in texts]}]}],
+                "changes": "rebuilt as a shorter list of points (offline)"}
+
+    def tweak_slide(self, payload: dict, png: bytes | None = None) -> dict:
+        return {"code": "def build(prs, ctx):\n    pass\n", "explanation": "no change (offline)"}
+
+    draw_slide = tweak_slide
+
+    def review_changes(self, payload: dict, pngs: list) -> dict:
+        return {"slides": [{"slide": s["slide"], "ok": True, "problems": []}
+                           for s in payload.get("slides") or []]}
+
     def route(self, instruction: str, context: dict) -> dict:
         """Offline routing: the rules alone (rules_route).
 
@@ -214,34 +251,6 @@ class StubAgentPlanner(StubPlanner):
                         facts.append({"text": sentence, "quote": sentence,
                                       "source": f"{src['name']} > {section}".rstrip(" >")})
         return {"facts": facts[:40], "datasets": {}, "gaps": []}
-
-    def plan_edit(self, instruction: str, slides: list[dict], context: dict | None = None) -> dict:
-        """A tiny but real editor: `set_text` on the slides named, shortened if asked."""
-        want = _slide_numbers(instruction) or []
-        actions = []
-        for s in slides:
-            if want and s["slide"] not in want:
-                continue
-            for box in s.get("boxes", []):
-                para = (box.get("paragraphs") or [None])[0]
-                if not para:
-                    continue
-                text = para["text"]
-                if "less wordy" in instruction.lower() or "shorten" in instruction.lower():
-                    short = " ".join(text.split()[: max(2, len(text.split()) // 2)])
-                    if short != text:
-                        actions.append({"action": "set_text", "ref": para["ref"], "text": short})
-                break
-        return {"actions": actions, "cannot": None if actions else "the offline stub only shortens text"}
-
-    def write_slide_code(self, contract, content, style, ctx, feedback=None, previous=None) -> dict:
-        """Offline code: a fixed, working builder (STUB_SLIDE_CODE) that draws or reworks a slide
-        as a
-        row of panels.
-
-        Called by: nodes.custom_code.custom_code, in tests and the demo.
-        """
-        return {"code": STUB_SLIDE_CODE, "explanation": "a row of panels, one per point"}
 
     def review_slide(self, png, context=None) -> dict:
         """The offline stub cannot see. Saying so beats quietly passing every slide."""
@@ -301,7 +310,7 @@ def _slide_numbers(text: str) -> list[int]:
     """'slide 3', 'slides 2 and 5', 'slides 2-4', 'the first slide' -> [3] / [2,5] / [2,3,4] / [1].
 
 
-    Called by: StubAgentPlanner.plan_edit, rules_route.
+    Called by: StubAgentPlanner.split_edit, rules_route.
     """
     out: list[int] = []
     for a, b in re.findall(r"slides?\s+(\d+)\s*(?:-|to|through)\s*(\d+)", text, re.IGNORECASE):
@@ -359,7 +368,7 @@ def planner(s: Settings | None = None):
     """The planner this process should use, from settings. Never reads a key from the environment.
 
 
-    Called by: cli.cmd_doctor, cli.cmd_kit, graph.deck_graph; tests/validate_real_model.py.
+    Called by: cli.cmd_doctor, cli.cmd_design, graph.deck_graph.
     """
     s = s or settings()
     if s.llm_client == "stub":

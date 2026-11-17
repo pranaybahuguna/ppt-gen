@@ -234,12 +234,11 @@ def upload_path(path: str) -> str:
 
 # --------------------------------------------------------------------------- operations
 
-def op_create(deck_id, brief, context=None, template=None, outline=None, content_pack=None,
+def op_create(deck_id, brief, context=None, template=None, content_pack=None,
               log=print) -> dict:
     """Create a deck. `context`: object URIs of documents the facts are gathered from."""
     return describe(facade.create_deck(deck_id, brief, content_pack, template, log=log,
-                                       context=context or [],
-                                       **({"outline": outline} if outline else {})), deck_id)
+                                       context=context or []), deck_id)
 
 
 def op_ingest(path: str, make_default: bool, log=print) -> dict:
@@ -318,7 +317,8 @@ def deck_file(deck_id: str, version: int | None = None) -> tuple[bytes, str]:
 
 @mcp.tool
 async def ingest_template(path: str, make_default: bool = True, wait: bool = False) -> dict:
-    """Ingest a PowerPoint template so decks can be built in its look (2-5 minutes).
+    """Ingest a PowerPoint template so decks can be built in its look (a few seconds): checks it,
+    reads its layout, colours and fonts, and stores it.
 
     path: the .pptx on the server's machine. make_default: decks use it when none is named.
     wait: hold until done; otherwise returns a job - poll job_status.
@@ -536,13 +536,11 @@ async def rest_create(request: Request) -> Response:
     template = fields.get("template") or None
     if files.get("template"):
         template = upload(*files["template"][0])
-    outline = fields.get("outline")
-    outline = json.loads(outline) if isinstance(outline, str) else outline
     content_pack = fields.get("content_pack")
     content_pack = json.loads(content_pack) if isinstance(content_pack, str) else content_pack
     return _job_response(await _run_job(
         "create", deck_id, {"brief": brief, "context": docs, "template": template},
-        lambda log: op_create(deck_id, brief, docs, template, outline, content_pack, log),
+        lambda log: op_create(deck_id, brief, docs, template, content_pack, log),
         _wait(request), title=str(fields.get("title") or brief[:80]), template=template))
 
 

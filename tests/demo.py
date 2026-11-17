@@ -116,9 +116,7 @@ def main() -> int:
     global DECK
     DECK = deck_id()
     print(f"deck session: {DECK}")
-    # The escape hatch is off by default; this demo exists partly to exercise it.
     reset(Settings.load())
-    settings().allow_custom_code = True
     planner = StubAgentPlanner()
 
     template_path = REPO / "local" / "samples" / "example_style.pptx"
@@ -129,9 +127,9 @@ def main() -> int:
     print(f"template in the bucket: {template}")
 
     heading("1. create - a new deck in the template's look")
-    print("   the kit is built and cached on first use; the last slide cannot fit any layout")
+    print("   storyline from the facts, one writer per slide in parallel, drawn from pieces")
     created = show(facade.create_deck(DECK, "the support bot pilot, for the operations review",
-                                      CONTENT, template, planner=planner, outline=OUTLINE))
+                                      CONTENT, template, planner=planner))
     if not created.get("deck"):
         print("\nthe deck was not built; stopping here")
         return 1

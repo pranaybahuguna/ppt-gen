@@ -1,42 +1,37 @@
 """The graph.
 
 A `StateGraph` over `DeckState`. Every node is a function `state -> updates`; every fork is a
-*named* function that returns the name of the next node. That is deliberate: when a deck comes
-out wrong, the question is always "which way did it go, and why", and the answer should be a
-function you can read and a `trace` entry you can look at, not a chain of `if` statements
-buried in a pipeline.
+*named* function that returns the name of the next node - or, where work splits up, a list of
+`Send`s that run one node many times at once.
 
-What LangGraph is actually buying here, beyond shape:
+The shape is divide and conquer. A new deck is planned as a whole (its storyline), then every
+slide is written by its own `write`, all in parallel. A change to a deck - any deck, including
+one edited by hand - is split into one task per slide, done by its own `work`, in parallel. Both
+end in `review`: a vision model looks at every new or changed slide next to what was asked, and
+the weak ones go round once more through `work` and `join`.
 
+        START -> intake -> route -+-> gather -> storyline -> approve_outline -> write x N -> build -+
+                                  |                                                                 v
+                                  +-> split -> work x N -> join ------------------------------> review
+                                  |               ^                                                 |
+                                  |               +------------- weak slides, once ----------------+
+                                  |                                                                 |
+                                  +-> translate_plan -> translate_apply -> look -> translate_repair |
+                                  |                                         |                       |
+                                  +-> ask -> route                          +--------> deliver <---+
+                                  +-> decline -> END                                     |
+                                                                                         v
+                                                                                        END
+
+What LangGraph is buying here:
+
+* **parallel work** - `Send` runs a writer per slide and a worker per task at the same time, and
+  the node after them (`build`, `join`) waits for all of them;
 * **persistence** - the state after every node is written to Postgres under a `thread_id`, so
-  the next request in the same conversation starts from "there is a deck, it is v3, it uses
-  this kit" instead of re-deriving it;
+  the next request in the same conversation starts from "there is a deck, it is v3";
 * **interrupts** - `ask` and `approve_outline` stop the run, let the process exit, and resume
-  from exactly that point when an answer arrives. Without a checkpointer that is not possible;
-* **loops with a bound** - repair and the code path are real cycles in the graph, with the
-  decision to go round again written down in one place;
-* **streaming** - a caller can watch node by node rather than waiting for a deck.
-
-What it is not buying: the decisions themselves. Almost all of them are rules (does this
-layout hold this content? did the text fit? is there a kit for this template?), which is why
-the router asks a model only when the rules are unsure, and why nothing in here is an agent
-loop with tools.
-
-        START -> intake -> route -> ask --------------+
-                             |                        |
-                             +-> gather -> ensure_kit -> outline -> approve_outline ->
-                             render_slides
-                             |                                                   |
-                             |                            +----------------------+
-                             |                            v
-                             |                        assemble ---+        repair
-                             |                                    |          ^
-                             +-> translate_plan -> translate_apply +-> look --+
-                             |                                    |      |
-                             +-> edit_plan -----> edit_apply -----+      +-> translate_repair
-                             |                                           +-> custom_code
-                             |                                           +-> deliver -> END
-                             +-> decline ------------------------------------------> END
+  from exactly that point when an answer arrives;
+* **a bounded loop** - review's second pass is a real cycle, with the decision in one place.
 """
 from __future__ import annotations
 
@@ -46,7 +41,9 @@ from functools import partial
 from langgraph.graph import END, START, StateGraph
 
 from . import nodes
+from .design import nodes as design
 from .infra.checkpointer import checkpointer
+from .revise import nodes as revise
 from .settings import Settings, settings
 from .state import DeckState
 
@@ -56,8 +53,7 @@ from .state import DeckState
 def _redirected(state: DeckState) -> str | None:
     """Any node may say "I need to ask" or "I will not do this". Honour it before anything else.
 
-    Called by: after_edit_plan, after_ensure_kit, after_look, after_outline,
-        after_translate_plan.
+    Called by: after_look, after_translate_plan.
     """
     chosen = state.get("route")
     if chosen == "ask":
@@ -65,14 +61,6 @@ def _redirected(state: DeckState) -> str | None:
     if chosen == "decline":
         return "decline"
     return None
-
-
-def after_outline(state: DeckState) -> str:
-    """Decision after outline: ask or decline if outline said so, otherwise approve_outline.
-
-    Called by: LangGraph, as the conditional edge out of outline (build_graph).
-    """
-    return _redirected(state) or "approve_outline"
 
 
 def after_translate_plan(state: DeckState) -> str:
@@ -84,41 +72,12 @@ def after_translate_plan(state: DeckState) -> str:
     return _redirected(state) or "translate_apply"
 
 
-def after_edit_plan(state: DeckState) -> str:
-    """Decision after edit_plan: ask or decline if edit_plan said so, otherwise edit_apply.
-
-    Called by: LangGraph, as the conditional edge out of edit_plan (build_graph).
-    """
-    return _redirected(state) or "edit_apply"
-
-
-def after_ensure_kit(state: DeckState) -> str:
-    """Decision after ensure_kit: ask or decline if ensure_kit said so, otherwise outline.
-
-    Called by: LangGraph, as the conditional edge out of ensure_kit (build_graph).
-    """
-    return _redirected(state) or "outline"
-
-
 def after_look(state: DeckState) -> str:
-    """Every build passes through `look` before its own decision, so a problem a vision model
-    saw is decided on exactly like a problem the geometry checks found.
+    """Decision after a translation was checked: repair text that overflows, or deliver.
 
-    A node that already said "I will not do this" is honoured first: without that check, an
-    edit that applied nothing fell through to the create route's decision and was delivered as
-    though it had worked.
-
-    Called by: build_graph.
+    Called by: LangGraph, as the conditional edge out of look (build_graph).
     """
-    redirected = _redirected(state)
-    if redirected:
-        return redirected
-    route = state.get("route")
-    if route == "translate":
-        return nodes.after_translate(state)
-    if route == "edit":
-        return nodes.after_edit(state)
-    return nodes.after_assemble(state)
+    return _redirected(state) or nodes.after_translate(state)
 
 
 # --------------------------------------------------------------------------- wiring
@@ -135,57 +94,55 @@ def build_graph(planner=None, log=print) -> StateGraph:
     g.add_node("ask", nodes.ask)
     g.add_node("decline", nodes.decline)
 
+    # create: facts -> storyline -> (approval) -> one writer per slide, in parallel -> build
     g.add_node("gather", partial(nodes.gather, planner=planner, log=log))
-    g.add_node("ensure_kit", partial(nodes.ensure_kit, planner=planner, log=log))
-    g.add_node("outline", partial(nodes.outline, planner=planner, log=log))
-    g.add_node("approve_outline", nodes.approve_outline)
-    g.add_node("render_slides", partial(nodes.render_slides, planner=planner, log=log))
-    g.add_node("assemble", partial(nodes.assemble, log=log))
-    g.add_node("repair", partial(nodes.repair, planner=planner, log=log))
+    g.add_node("storyline", partial(design.storyline, planner=planner, log=log))
+    g.add_node("approve_outline", design.approve_outline)
+    g.add_node("write", partial(design.write, planner=planner, log=log))
+    g.add_node("build", partial(design.build, log=log))
 
+    # edit: one task per slide, in parallel -> join. Shared with create from here on: `review`
+    # looks at every new or changed slide and sends weak ones back through `work` and `join`.
+    g.add_node("split", partial(revise.split, planner=planner, log=log))
+    g.add_node("work", partial(revise.work, planner=planner, log=log))
+    g.add_node("join", partial(revise.join, log=log))
+    g.add_node("review", partial(revise.review, planner=planner, log=log))
+
+    # translate: unchanged - the text is replaced in place, every shape stays
     g.add_node("translate_plan", partial(nodes.translate_plan, planner=planner, log=log))
     g.add_node("translate_apply", partial(nodes.translate_apply, log=log))
     g.add_node("translate_repair", partial(nodes.translate_repair, planner=planner, log=log))
-
-    g.add_node("edit_plan", partial(nodes.edit_plan, planner=planner, log=log))
-    g.add_node("edit_apply", partial(nodes.edit_apply, planner=planner, log=log))
-
     g.add_node("look", partial(nodes.look, planner=planner, log=log))
-    g.add_node("custom_code", partial(nodes.custom_code, planner=planner, log=log))
+
     g.add_node("deliver", partial(nodes.deliver, log=log))
 
     g.add_edge(START, "intake")
     g.add_edge("intake", "route")
-
     g.add_conditional_edges("route", nodes.after_route,
-                            ["ask", "gather", "translate_plan", "edit_plan",
-                             "custom_code", "decline"])
+                            ["ask", "gather", "translate_plan", "split", "decline"])
     # An answer goes back through the router: the question may have changed the route entirely.
     g.add_edge("ask", "route")
 
-    g.add_conditional_edges("gather", nodes.after_gather, ["ensure_kit", "ask", "decline"])
-    g.add_conditional_edges("ensure_kit", after_ensure_kit, ["outline", "ask", "decline"])
-    g.add_conditional_edges("outline", after_outline, ["approve_outline", "ask", "decline"])
-    g.add_conditional_edges("approve_outline", nodes.after_approval, ["render_slides", "decline"])
-    g.add_conditional_edges("render_slides", nodes.after_render,
-                            ["assemble", "custom_code", "decline"])
-    # Every build goes through `look` before its decision. When `vision_review` is off the node
-    # returns immediately, so this costs nothing and the graph has one shape either way.
-    g.add_edge("assemble", "look")
-    g.add_conditional_edges("look", after_look,
-                            ["deliver", "repair", "custom_code", "translate_repair",
-                             "ask", "decline"])
-    g.add_edge("repair", "assemble")
+    g.add_conditional_edges("gather", nodes.after_gather, ["storyline", "ask", "decline"])
+    g.add_conditional_edges("storyline", design.after_storyline, ["approve_outline", "ask", "decline"])
+    # approval fans out with Send: one `write` per content slide; build waits for all of them.
+    g.add_conditional_edges("approve_outline", design.after_approval, ["write", "build", "decline"])
+    g.add_edge("write", "build")
+    g.add_edge("build", "review")
+
+    # split fans out the same way: one `work` per task; join waits for all of them.
+    g.add_conditional_edges("split", revise.after_split, ["work", "join", "ask", "decline"])
+    g.add_edge("work", "join")
+    g.add_edge("join", "review")
+    # review may send weak slides back to work once (Send again), or deliver.
+    g.add_conditional_edges("review", revise.after_review, ["work", "deliver"])
 
     g.add_conditional_edges("translate_plan", after_translate_plan,
                             ["translate_apply", "ask", "decline"])
     g.add_edge("translate_apply", "look")
+    g.add_conditional_edges("look", after_look, ["deliver", "translate_repair", "ask", "decline"])
     g.add_edge("translate_repair", "translate_apply")
 
-    g.add_conditional_edges("edit_plan", after_edit_plan, ["edit_apply", "ask", "decline"])
-    g.add_edge("edit_apply", "look")
-
-    g.add_conditional_edges("custom_code", nodes.after_code, ["deliver", "repair"])
     g.add_edge("deliver", END)
     g.add_edge("decline", END)
     return g

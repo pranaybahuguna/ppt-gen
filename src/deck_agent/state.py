@@ -5,7 +5,7 @@ This is the design decision the whole agent hangs on, so it is worth stating pla
 Two different things persist across a conversation about a deck:
 
 * **the conversation** - what was asked, what was answered;
-* **the deck** - which version is current, which template and kit it uses, what the outline
+* **the deck** - which version is current, which template it uses, what its storyline
   says, what changed last, what the checks found.
 
 They are not the same, and the second must not live inside the first. If "the current deck" is
@@ -46,7 +46,7 @@ CLEAR = "__clear__"
 
 
 def accumulate(old: list, new):
-    """Reducer for list fields that build up over a turn (errors, plan_divergence): appends what a
+    """Reducer for list fields that build up over a turn (errors, slide_specs, task_results): appends what a
     node returns, and empties the list when a node returns CLEAR.
 
     Called by: LangGraph, whenever a node returns one of those fields.
@@ -92,31 +92,27 @@ class DeckState(TypedDict, total=False):
     # ---- the deck ------------------------------------------------------------------
     source_deck: str | None         # the deck the person brought in, untouched
     template: str | None            # the template whose look we are matching
-    template_id: str | None         # content hash of the template: the kit cache key
-    kit: str | None                 # object URI of kit.json
-    kit_patterns: list[str]         # pattern names, for prompts and for cheap decisions
+    template_id: str | None         # content hash of the template
     deck_versions: list[str]        # every version, oldest first. The last one is current.
     work_base: str | None           # the version this route started from. Ops carry fingerprints
                                     # taken from it, so every attempt re-applies to *this* file,
                                     # never to the output of a previous attempt.
 
     # ---- content -------------------------------------------------------------------
-    outline: dict | None            # stage 1: what each slide says
-    plan: dict | None               # stage 2: which layout, with what in it - this turn's
-    plan_divergence: Annotated[list[str], accumulate]
-                                    # every change to the deck that the plan does NOT describe.
-                                    # A deck can only be rebuilt from its plan while this is
-                                    # empty, so each node that edits bytes without updating the
-                                    # plan says so here, in words a person can read.
-    plan_jobs: list[int] | None     # plan slide i holds the content of outline job plan_jobs[i]
-                                    # - not the same index once some slides are designed
-    deck_plan: str | None           # object URI of the plan that built the CURRENT deck. It
-                                    # describes the deck, not the turn, so it survives
-                                    # `turn_reset` - and it is what lets a later turn say
-                                    # "lay slide 4 out differently" without re-deriving the
-                                    # slide's content from its pixels.
-    edit_actions: list[dict] | None # the edit route's typed actions
-    pending_code: list[dict]        # slides no layout can hold: [{"position": i, "content": {...}}]
+    outline: dict | None            # the storyline, as shown for approval
+    plan: dict | None               # the translate route's plan for this turn
+    # ---- the create route: storyline -> write (parallel) -> build -> review ----------------
+    story: dict | None              # the deck's argument: title, sections, a plan per slide
+    deck_frame: list[dict] | None   # [{spec, plan}] in deck order; plan None = cover / divider
+    slide_specs: Annotated[list[dict], accumulate]    # one per finished `write`
+    slides_wanted: str | None       # how many content slides, e.g. "8-12"
+    # ---- the edit route: split -> work (parallel) -> join -> review ------------------------
+    edit_tasks: list[dict] | None   # [{id, kind, slide, after, instruction, round}] from split
+    edit_summary: str | None        # split's one-sentence account of what will change
+    task_results: Annotated[list[dict], accumulate]   # one per finished `work`, every round
+    edit_round: int                 # 0 = first pass; 1 = the pass after review
+    changed: list[dict]             # [{task, kind, instruction, slide}] slide = its position now
+    revise: list[dict]              # review's second-pass tasks with their feedback
     extra_ops: list[dict]           # deterministic repair ops added on top of a compiled plan
                                     # (the font-size fallback), kept apart so the plan stays the
                                     # model's answer and the fallback stays ours
@@ -131,9 +127,6 @@ class DeckState(TypedDict, total=False):
     repair_round: int
 
     # ---- the escape hatch ----------------------------------------------------------
-    code_attempt: int
-    code_slides: list[dict]         # {"slide": n, "explanation": ..., "code": uri}
-    code_feedback: list[str]
 
     # ---- a person in the loop ------------------------------------------------------
     pending_question: str | None    # set when the graph stopped to ask
@@ -153,12 +146,11 @@ def new_state(thread_id: str, instruction: str, **kw: Any) -> DeckState:
     """
     base: DeckState = {
         "thread_id": thread_id, "instruction": instruction, "turn": 1,
-        "attachments": [], "context_docs": [], "deck_versions": [], "kit_patterns": [],
+        "attachments": [], "context_docs": [], "deck_versions": [],
         "findings": [], "structural": [], "leaked": [], "previews": [],
         "vision_notes": [],
-        "repair_round": 0, "code_attempt": 0, "code_slides": [], "code_feedback": [],
-        "pending_code": [], "extra_ops": [],
-        "approved": {}, "changelog": [], "trace": [], "errors": [], "plan_divergence": [],
+        "repair_round": 0, "extra_ops": [],
+        "approved": {}, "changelog": [], "trace": [], "errors": [],
         "pending_question": None, "answer": None, "delivered": None,
     }
     base.update(kw)  # type: ignore[typeddict-item]
@@ -170,7 +162,7 @@ def turn_reset(instruction: str, run_id: str, turn: int, **kw) -> dict:
 
     Without this, the second turn in a conversation inherits the first one's plan, findings and
     repair counter, and then "now translate it" quietly reuses a stale outline. What *survives*
-    a turn is the deck itself: its versions, its template, its kit, its outline. Everything
+    a turn is the deck itself: its versions, its template, its storyline. Everything
     about the last piece of work is cleared here, on purpose, in one visible place.
 
     Called by: facade._invoke.
@@ -178,10 +170,12 @@ def turn_reset(instruction: str, run_id: str, turn: int, **kw) -> dict:
     return {
         "instruction": instruction, "run_id": run_id, "turn": turn,
         "route": None, "route_reason": None, "route_confidence": None, "route_by": None,
-        "plan": None, "edit_actions": None, "work_base": None,
+        "plan": None, "work_base": None,
+        "edit_tasks": None, "edit_summary": None, "task_results": CLEAR, "edit_round": 0,
+        "slide_specs": CLEAR, "deck_frame": None,
+        "changed": [], "revise": [],
         "findings": [], "structural": [], "leaked": [], "previews": [], "vision_notes": [],
-        "repair_round": 0, "extra_ops": [], "pending_code": [], "code_attempt": 0,
-        "code_feedback": [], "changelog": [], "pending_question": None, "answer": None,
+        "repair_round": 0, "extra_ops": [], "changelog": [], "pending_question": None, "answer": None,
         "delivered": None, "slide_scope": None, "target_lang": None,
         # errors belong to the turn that produced them, not to the session
         "errors": CLEAR,
@@ -192,8 +186,8 @@ def turn_reset(instruction: str, run_id: str, turn: int, **kw) -> dict:
 def current_deck(state: DeckState) -> str | None:
     """The one answer to "which deck are we talking about".
 
-    Called by: nodes.common.fetch_current, nodes.custom_code.custom_code, nodes.deliver.deliver,
-        nodes.edit.edit_plan, nodes.translate.translate_plan, summarise.
+    Called by: nodes.deliver.deliver, nodes.translate.translate_plan, revise.nodes (split,
+        join, review), summarise.
     """
     versions = state.get("deck_versions") or []
     return versions[-1] if versions else None
@@ -210,8 +204,6 @@ def summarise(state: DeckState) -> dict:
         "has_attached_deck": bool(state.get("source_deck")),
         "deck_versions": len(state.get("deck_versions") or []),
         "has_template": bool(state.get("template")),
-        "has_kit": bool(state.get("kit")),
-        "kit_patterns": state.get("kit_patterns") or [],
         "turn": state.get("turn", 1),
         "last_route": state.get("route"),
     }
@@ -220,9 +212,7 @@ def summarise(state: DeckState) -> dict:
 def step(name: str, **fields: Any) -> dict:
     """One entry for `trace`. Every node adds exactly one, so the trace is the path taken.
 
-    Called by: nodes.create.approve_outline, nodes.create.assemble, nodes.create.outline,
-        nodes.create.render_slides, nodes.create.repair, nodes.custom_code.custom_code,
-        nodes.deliver.deliver, and 12 more.
+    Called by: every graph node (design.nodes, revise.nodes, nodes.*).
     """
     import time
 

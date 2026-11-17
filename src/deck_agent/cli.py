@@ -3,8 +3,7 @@
     deckops doctor                       is everything this needs actually working?
     deckops init                         create the checkpoint tables and the bucket
     deckops seed                         put the sample template and content in the bucket
-    deckops kit <template.pptx>          ingest a template: kit cached in kits/, template in
-    uploads/
+    deckops template <template.pptx>     check a template, read its look, store it in uploads/
     deckops create <id> "<brief>" ...    a new deck
     deckops edit <id> "<instruction>"    change the deck this session has
     deckops translate <id> <lang>        translate it
@@ -213,10 +212,11 @@ def cmd_seed(args) -> int:
     return 0
 
 
-def cmd_kit(args) -> int:
-    """`deckops kit <template.pptx>`: ingest a template (templates.ingest) and print the result.
+def cmd_template(args) -> int:
+    """`deckops template <template.pptx>`: check a template, read its design profile, store it
+    (templates.ingest) and print what will be used.
 
-    Called by: main(). Exit code 1 when the template yields no usable layouts.
+    Called by: main(). Exit code 1 when the file cannot be used as a template.
     """
     from .templates import ingest
 
@@ -227,11 +227,7 @@ def cmd_kit(args) -> int:
     except FileNotFoundError as e:
         sys.exit(str(e))
     _p(result)
-    if not result["ok"]:
-        print("\nNo usable layouts: this template was not cached, and no deck can be built "
-              "from it yet. The reasons above are per layout.")
-        return 1
-    return 0
+    return 0 if result["ok"] else 1
 
 
 def cmd_create(args) -> int:
@@ -242,16 +238,45 @@ def cmd_create(args) -> int:
     Called by: main().
     """
     content = json.loads(Path(args.content).read_text()) if args.content else None
-    outline = json.loads(Path(args.outline).read_text()) if args.outline else None
-    extra = {"outline": outline} if outline else {}
     context = [_upload_if_local(c) for c in args.context or []]
     template = _upload_if_local(args.template)
     result = recorded("create", args.id, {"brief": args.brief, "context": context},
                       lambda: facade.create_deck(args.id, args.brief, content, template,
-                                                 context=context, **extra),
+                                                 context=context),
                       title=args.brief[:80], template=template)
     _p(result)
     return 0 if result.get("ok") else 1
+
+
+def cmd_design(args) -> int:
+    """`deckops design <brief> --context FILE --out deck.pptx`: a deck by the new designed path
+    (facts -> storyline -> slide specs -> pieces), outside the graph. With --specs, draws a
+    ready-made specs file instead and calls no model.
+
+    Called by: main().
+    """
+    from .design.plan import plan_deck
+    from .design.render import render_deck
+    from .nodes.gather import read_document
+
+    s = settings()
+    template = args.template or s.default_template
+    if str(template).startswith("s3://"):
+        local = s.workspace_root / "design-template.pptx"
+        local.write_bytes(store().get_bytes(template))
+        template = local
+    out = Path(args.out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    if args.specs:
+        data = json.loads(Path(args.specs).read_text())
+        specs = data["specs"] if isinstance(data, dict) else data
+        _p(render_deck(template, specs, out))
+        return 0
+    sources = [{"name": Path(c).name, "text": read_document(Path(c).name, Path(c).read_bytes())}
+               for c in args.context or []]
+    result = plan_deck(args.brief, sources, template, out, make_planner(s), args.slides)
+    _p(result["report"])
+    return 0
 
 
 def cmd_edit(args) -> int:
@@ -313,7 +338,7 @@ def cmd_attach(args) -> int:
 
 
 def cmd_session(args) -> int:
-    """`deckops session <id>`. Prints facade.session: versions, template, kit, trace.
+    """`deckops session <id>`. Prints facade.session: versions, template, trace.
 
     Called by: main(), when that subcommand is given. Returns the process exit code.
     """
@@ -488,12 +513,12 @@ def main(argv: list[str] | None = None) -> int:
     sv.set_defaults(fn=cmd_serve)
     sub.add_parser("selftest", help="prove the sandbox is isolated").set_defaults(fn=cmd_selftest)
 
-    k = sub.add_parser("kit", help="build and cache a style kit for a template")
+    k = sub.add_parser("template", help="check a template, read its look, and store it")
     k.add_argument("template")
-    k.add_argument("--out", help="also write the kit to this file")
+    k.add_argument("--out", help="also write the design profile to this file")
     k.add_argument("--make-default", action="store_true",
                    help="make this template config/agent.json's default_template")
-    k.set_defaults(fn=cmd_kit)
+    k.set_defaults(fn=cmd_template)
 
     c = sub.add_parser("create", help="create a deck")
     c.add_argument("id", help="the deck session id (= the conversation)")
@@ -503,8 +528,16 @@ def main(argv: list[str] | None = None) -> int:
                    help="a document the deck should be based on (.md .txt .docx ...). "
                         "Repeatable. The facts are written from it; see the gather node")
     c.add_argument("--content", help="a ready-made content pack JSON, instead of --context")
-    c.add_argument("--outline", help="use this ready-made outline instead of calling a model")
     c.set_defaults(fn=cmd_create)
+
+    dz = sub.add_parser("design", help="build a deck by the designed path (storyline, specs, pieces)")
+    dz.add_argument("brief")
+    dz.add_argument("--context", action="append", metavar="FILE", help="a source document; repeatable")
+    dz.add_argument("--template", help="a .pptx path or an s3:// URI (default: default_template)")
+    dz.add_argument("--out", required=True, help="where to write the .pptx")
+    dz.add_argument("--slides", default="8-12", help="how many content slides, as a range")
+    dz.add_argument("--specs", help="draw this specs JSON instead of planning (no model)")
+    dz.set_defaults(fn=cmd_design)
 
     e = sub.add_parser("edit", help="change the deck in this session")
     e.add_argument("id")

@@ -33,8 +33,7 @@ def describe(result: dict, deck_id: str | None) -> dict:
             else:
                 where = f"slide {c['slide']}: " if c.get("slide") and "slide" not in str(c.get("change")) else ""
                 extra = f" - {c['explanation']}" if c.get("explanation") else ""
-                counts = c.get("pattern_counts")
-                extra += f" ({', '.join(f'{k} x{v}' for k, v in counts.items())})" if counts else ""
+                extra += f" ({', '.join(p for p in c['drawn_with'] if p)})" if c.get("drawn_with") else ""
                 lines.append(f"{where}{c.get('change')}{extra}")
         lines += [f"warning: {w}" for w in result.get("warnings") or []]
         lines += [f"error: {e.get('message')}" for e in result.get("errors") or []]

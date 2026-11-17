@@ -45,7 +45,6 @@ def test_tidy_keeps_what_the_session_needs(two_turns):
 
         assert not going & needed, "tidy would delete something the session refers to"
         assert created["deck"] in needed and edited["deck"] in needed, "undo needs every version"
-        assert values["deck_plan"] in needed, "an edit rebuilds from this plan"
         latest = values["run_id"]
         assert not any(f"/{latest}/" in u for u in going), "the latest run is kept whole"
         assert not any(u.endswith("/manifest.json") for u in going), "manifests are the history"
@@ -110,12 +109,12 @@ def test_tidy_after_turn(offline_settings, template, planner):
     created = facade.create_deck("auto", "pilot", CONTENT, tpl, planner=planner, outline=OUTLINE,
                                  **QUIET)
     first_run = Ref.parse(created["manifest"]).key.split("/")[1]
-    assert f"auto/{first_run}/ops.json" in keys("auto/")
+    assert f"auto/{first_run}/specs.json" in keys("auto/")
 
     edited = facade.edit_deck("auto", "make slide 2 less wordy", planner=planner, **QUIET)
     assert edited["ok"] and "tidied" in edited, edited
     assert "error" not in edited["tidied"] and edited["tidied"]["deleted_objects"] > 0
-    assert f"auto/{first_run}/ops.json" not in keys("auto/"), "the first run's bulk should be gone"
+    assert f"auto/{first_run}/specs.json" not in keys("auto/"), "the first run's bulk should be gone"
     assert f"auto/{first_run}/manifest.json" in keys("auto/")
     assert facade.edit_deck("auto", "make slide 1 less wordy", planner=planner, **QUIET)["ok"]
 
@@ -129,52 +128,6 @@ def test_ages(text, seconds):
 def test_a_bad_age_says_what_it_wants():
     with pytest.raises(ValueError, match="7d"):
         cleanup.parse_age("soon")
-
-
-# --------------------------------------------------------------------------- one kit only
-
-def test_ingesting_keeps_only_the_new_kit_and_its_template(offline_settings):
-    st = store()
-    for key in ("kits/aaa.json", "kits/bbb.json"):
-        st.put_json({"patterns": {}}, key)
-    for key in ("uploads/aaa-new.pptx", "uploads/bbb-old.pptx", "uploads/ccc-attached-deck.pptx"):
-        st.put_bytes(b"x", key)
-
-    out = cleanup.keep_only_kit(st, "aaa")
-
-    assert keys("kits/") == {"kits/aaa.json"}
-    assert keys("uploads/") == {"uploads/aaa-new.pptx", "uploads/ccc-attached-deck.pptx"}, \
-        "the old kit's template goes with it; an attached deck with no kit is not touched"
-    assert len(out["removed_kits"]) == 1 and len(out["removed_templates"]) == 1
-
-
-def test_single_kit_keeps_an_unknown_templates_kit_with_the_deck(offline_settings, template,
-                                                                planner):
-    object.__setattr__(offline_settings, "single_kit", True)
-    store().put_json({"patterns": {}}, "kits/the-ingested-one.json")
-    tpl = store().put(template, f"uploads/{sha256_file(template)}-template.pptx")
-
-    created = facade.create_deck("other-tpl", "pilot", CONTENT, tpl, planner=planner,
-                                 outline=OUTLINE, **QUIET)
-    assert created["ok"], created
-    assert keys("kits/") == {"kits/the-ingested-one.json"}, "only `deckops kit` writes kits/"
-    assert any(k.startswith("other-tpl/kit-") for k in keys("other-tpl/"))
-    assert facade.edit_deck("other-tpl", "make slide 2 less wordy", planner=planner, **QUIET)["ok"]
-
-    with checkpointer() as saver:   # and purging the deck takes its kit with it
-        cleanup.execute(store(), saver, cleanup.plan_purge(store(), saver, ["other-tpl"]))
-    assert keys("kits/") == {"kits/the-ingested-one.json"} and not keys("other-tpl/")
-
-
-def test_a_deck_whose_kit_was_replaced_says_why_it_cannot_rebuild(two_turns):
-    from deck_agent.nodes.edit import _template_still_there
-
-    with checkpointer() as saver:
-        values = cleanup.state_of(saver, "keep-me")
-    assert _template_still_there(values)[0]
-    store().delete([values["kit"]])
-    can, why = _template_still_there(values)
-    assert not can and "replaced" in why
 
 
 # --------------------------------------------------------------------------- keep_versions

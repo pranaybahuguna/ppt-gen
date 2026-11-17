@@ -89,28 +89,6 @@ def test_the_baseline_hides_problems_the_deck_already_had(template):
     assert filtered["structural"] == []
 
 
-def test_moving_a_slide_changes_only_the_slide_list(sample_deck, tmp_path):
-    out = tmp_path / "moved.pptx"
-    before = [s["ref"] for s in deck.probe(sample_deck)["slides"]]
-    stats = deck.move_slide(sample_deck, 5, 1, out)
-    after = [s["ref"] for s in deck.probe(out)["slides"]]
-
-    assert stats["moved"] is True
-    assert stats["changed"] == ["ppt/presentation.xml"]
-    assert after[1] == before[5]
-    assert sorted(after) == sorted(before)
-
-
-def test_moving_a_slide_to_where_it_already_is_does_nothing(sample_deck, tmp_path):
-    stats = deck.move_slide(sample_deck, 2, 2, tmp_path / "same.pptx")
-    assert stats["moved"] is False
-
-
-def test_moving_a_slide_that_does_not_exist_is_a_plan_error(sample_deck, tmp_path):
-    with pytest.raises(PlanInvalid):
-        deck.move_slide(sample_deck, 99, 0, tmp_path / "x.pptx")
-
-
 def test_changelog_reads_as_words(sample_deck):
     index = deck.probe(sample_deck)
     target = deck.paragraphs(index)[0]

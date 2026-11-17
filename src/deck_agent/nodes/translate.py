@@ -16,7 +16,6 @@ refuses the whole batch if they no longer match.
 from __future__ import annotations
 
 from ..engine import bootstrap
-from ..engine.build import font_fallback_ops
 from ..engine.deck import Baseline, apply_ops, changelog, check, paragraphs, preserved_count, probe
 from ..settings import settings
 from ..state import DeckState, current_deck, step
@@ -76,8 +75,7 @@ def translate_apply(state: DeckState, log=print) -> dict:
     Graph node. Runs: on the translate route, after translate_plan, and again after each
         translate_repair.
     Reads: plan, work_base, extra_ops, target_lang, repair_round.
-    Writes: deck_versions (+1), findings, structural, leaked, previews, changelog,
-        plan_divergence.
+    Writes: deck_versions (+1), findings, structural, leaked, previews, changelog.
     Next: look, then graph.after_look -> after_translate.
     Called by: LangGraph, registered in graph.build_graph.
     """
@@ -105,7 +103,6 @@ def translate_apply(state: DeckState, log=print) -> dict:
             "deck_versions": versions, "previews": previews,
             "findings": report["findings"], "structural": report["structural"], "leaked": [],
             "changelog": changelog(index, ops),
-            "plan_divergence": [f"translated into {state.get('target_lang')}"] if ops else [],
             "trace": [step("translate_apply", ops=len(ops), findings=len(report["findings"]),
                            preserved=preserved_count(ex), previews=len(previews),
                            previews_skipped=why_not)],
@@ -175,3 +172,12 @@ def after_translate(state: DeckState) -> str:
     if state.get("findings") and state.get("repair_round", 0) < settings().max_repair_rounds:
         return "translate_repair"
     return "deliver"
+
+
+def font_fallback_ops(findings: list[dict]) -> list[dict]:
+    """The deterministic last resort for overflow: shrink the text. No model involved.
+
+    Called by: translate_repair.
+    """
+    return [{"op": "set_font_size", "target": f["ref"], "size_pt": f["suggest_size_pt"]}
+            for f in findings if f["kind"] == "overflow" and f.get("suggest_size_pt")]

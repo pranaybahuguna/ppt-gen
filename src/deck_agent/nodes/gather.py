@@ -187,16 +187,16 @@ def _plain_number(n: str) -> str:
 def gather(state: DeckState, planner=None, log=print) -> dict:
     """Write the facts a new deck may state, from the request and any context documents.
 
-    Graph node. Runs: on the create route, after route and before ensure_kit. Does nothing when
-        the caller supplied a content pack or an outline.
-    Reads: instruction, context_docs (object URIs), content_pack, outline.
+    Graph node. Runs: on the create route, after route and before storyline. Does nothing when
+        the caller supplied a content pack with facts.
+    Reads: instruction, context_docs (object URIs), content_pack.
     Writes: content_pack (facts whose quotes were found in the source); or route='ask' with
         pending_question when there is too little to go on; route='decline' without a model.
         Publishes content_pack.json and gather_report.json in the run folder.
-    Next: after_gather -> ensure_kit | ask | decline.
+    Next: after_gather -> storyline | ask | decline.
     Called by: LangGraph, registered in graph.build_graph.
     """
-    if (state.get("content_pack") or {}).get("facts") or state.get("outline"):
+    if (state.get("content_pack") or {}).get("facts"):
         return {"trace": [step("gather", outcome="supplied by the caller")]}
 
     sources: list[dict] = []
@@ -253,11 +253,11 @@ def gather(state: DeckState, planner=None, log=print) -> dict:
 
 
 def after_gather(state: DeckState) -> str:
-    """Decision after gather: ask or decline if gather said so, otherwise ensure_kit.
+    """Decision after gather: ask or decline if gather said so, otherwise storyline.
 
     Called by: LangGraph, as the conditional edge out of gather (graph.build_graph).
     """
     chosen = state.get("route")
     if chosen in ("ask", "decline"):
         return chosen
-    return "ensure_kit"
+    return "storyline"
