@@ -93,3 +93,141 @@ def test_split_drops_tasks_for_slides_that_do_not_exist(offline_settings, templa
     assert [t["kind"] for t in out["edit_tasks"]] == ["redesign", "delete"]
     sends = after_split({**state, **out})
     assert len(sends) == 1 and sends[0].node == "work"      # delete needs no model: straight to join
+
+
+# --------------------------------------------------------------------------- titles and roles
+
+def test_new_content_slides_share_one_title_position_and_rule(template, tmp_path):
+    from pptx.enum.text import MSO_ANCHOR
+
+    from deck_agent.design.render import RULE_NAME, title_rule_y
+
+    deck = _deck(template, tmp_path)
+    P = extract_profile(deck)
+    prs = Presentation(str(deck))
+    content = [s for s in prs.slides if s.shapes.title is not None]
+    assert len(content) == 4
+    for s in content:
+        assert s.shapes.title.text_frame.vertical_anchor == MSO_ANCHOR.TOP
+        rules = [sh for sh in s.shapes if sh.name == RULE_NAME]
+        assert len(rules) == 1 and abs(rules[0].top / 914400 - title_rule_y(P)) < 0.01
+    covers = [s for s in prs.slides if s.shapes.title is None]
+    assert covers and not any(sh.name == RULE_NAME for s in covers for sh in s.shapes)
+
+
+def test_roles_tell_cover_and_sections_from_content(template, tmp_path):
+    roles = [o["role"] for o in deck_outline(Presentation(str(_deck(template, tmp_path))))]
+    assert roles == ["cover", "section", "content", "content", "content", "content"]
+
+
+def test_align_titles_moves_content_titles_only_and_keeps_one_rule(template, tmp_path):
+    from pptx.util import Emu
+
+    from deck_agent.design.render import RULE_NAME
+    from deck_agent.revise.house import align_titles
+
+    deck = _deck(template, tmp_path)
+    prs = Presentation(str(deck))
+    for k, s in enumerate(prs.slides):                 # scramble the titles, as a hand edit would
+        if s.shapes.title is not None:
+            s.shapes.title.top = Emu(int((0.2 + 0.15 * k) * 914400))
+    messy = tmp_path / "messy.pptx"
+    prs.save(str(messy))
+    P = extract_profile(messy)
+    content = [o["slide"] for o in deck_outline(Presentation(str(messy))) if o["role"] == "content"]
+    out = tmp_path / "aligned.pptx"
+    done = align_titles(messy, out, P, content)
+    assert done["changed"] == content
+    after = Presentation(str(out))
+    tops = {round(after.slides[n - 1].shapes.title.top / 914400, 3) for n in content}
+    assert tops == {round(P["title"]["box"][1], 3)}
+    for n in content:
+        assert sum(1 for sh in after.slides[n - 1].shapes if sh.name == RULE_NAME) == 1
+    before, now = _slide_bytes(messy), _slide_bytes(out)
+    assert before["ppt/slides/slide1.xml"] == now["ppt/slides/slide1.xml"], "the cover was touched"
+    assert before["ppt/slides/slide2.xml"] == now["ppt/slides/slide2.xml"], "the section was touched"
+
+
+def test_a_deck_task_defaults_to_content_slides(offline_settings, template, tmp_path):
+    from deck_agent.infra.storage import store
+    from deck_agent.revise.nodes import after_split, split
+
+    uri = store().put(_deck(template, tmp_path), "deck-task/deck.pptx")
+
+    class Fake:
+        def split_edit(self, payload):
+            return {"tasks": [{"kind": "align_titles"}, {"kind": "deck", "instruction": "titles navy"}]}
+
+    state = {"thread_id": "deck-task", "run_id": "r1", "instruction": "x", "deck_versions": [uri]}
+    out = split(state, planner=Fake(), log=lambda *a: None)
+    for t in out["edit_tasks"]:
+        assert t["slides"] == [3, 4, 5, 6] and t["left_alone"] == [1, 2]
+    sends = after_split({**state, **out})
+    assert [s.node for s in sends] == ["work"], "align_titles needs no model; only the deck task is sent"
+
+
+# --------------------------------------------------------------------------- following the person
+
+def test_every_task_carries_the_persons_own_words(offline_settings, template, tmp_path):
+    from deck_agent.infra.storage import store
+    from deck_agent.revise.nodes import split
+
+    uri = store().put(_deck(template, tmp_path), "words/deck.pptx")
+    said = "slide 4 bar graph text is a lil off, correct it"
+
+    class Fake:
+        def split_edit(self, payload):
+            return {"tasks": [{"kind": "tweak", "slide": 4, "instruction": "Fix misspelled chart labels"}]}
+
+    out = split({"thread_id": "words", "run_id": "r1", "instruction": said, "deck_versions": [uri]},
+                planner=Fake(), log=lambda *a: None)
+    assert out["edit_tasks"][0]["person_asked"] == said
+
+
+def test_a_worker_sees_the_persons_words_beside_the_task(template, tmp_path):
+    from deck_agent.revise.work import redesign
+
+    seen = []
+
+    class Fake:
+        def redesign_slide(self, payload, png=None):
+            seen.append(payload)
+            return dict(SPIKE[0])
+
+    deck = _deck(template, tmp_path)
+    task = {"id": "t1", "kind": "redesign", "slide": 3, "instruction": "Fix misspelled labels",
+            "person_asked": "the numbers on the chart look broken", "round": 0}
+    redesign(task, deck, extract_profile(deck), Fake(), tmp_path / "w", attempts=1)
+    assert seen[0]["request"] == "Fix misspelled labels"
+    assert seen[0]["person_asked"] == "the numbers on the chart look broken"
+
+
+def test_a_workers_view_of_a_chart_includes_how_it_is_drawn(template, tmp_path):
+    out = tmp_path / "chart.pptx"
+    render_deck(template, [SPIKE[0]], out)
+    charts = [e["chart"] for e in slide_shapes(Presentation(str(out)).slides[0]) if e.get("chart")]
+    fmt = charts[0]["format"]
+    assert fmt["value_labels"]["shown"] is True and fmt["value_labels"]["font_pt"]
+    assert "colour" in fmt["value_labels"] and "number_format" in fmt["value_labels"]
+    assert "series_colours" in fmt and "value_axis" in fmt
+
+
+def test_a_change_nobody_can_see_is_caught_by_code():
+    import io
+
+    from PIL import Image, ImageDraw
+
+    from deck_agent.revise.nodes import barely_changed
+
+    def png(draw_more=False):
+        im = Image.new("RGB", (400, 225), "white")
+        d = ImageDraw.Draw(im)
+        d.rectangle([20, 20, 200, 120], fill="navy")
+        if draw_more:
+            d.text((40, 150), "a one-word edit", fill="black")
+        buf = io.BytesIO()
+        im.save(buf, "PNG")
+        return buf.getvalue()
+
+    assert barely_changed(png(), png()) is True
+    assert barely_changed(png(), png(draw_more=True)) is False

@@ -103,12 +103,26 @@ class AgentPlanner(OpenAICompatPlanner):
 
         return self._maybe_images(DRAW_SYSTEM.format(), payload, [png] if png else [])
 
+    def deck_code(self, payload: dict, pngs: list[bytes]) -> dict:
+        """A consistency request + sample slides -> one piece of code for many slides.
+        Called by: revise.work.deck_change."""
+        from ..revise.prompts import DECK_SYSTEM
+
+        return self._maybe_images(DECK_SYSTEM.format(), payload, pngs)
+
     def review_changes(self, payload: dict, pngs: list[bytes]) -> dict:
         """Pictures of the changed slides + what was asked -> per-slide problems.
         Called by: revise.nodes.review."""
         from ..revise.prompts import REVIEW_SYSTEM
 
         return self._maybe_images(REVIEW_SYSTEM, payload, pngs)
+
+    def audit_deck(self, payload: dict) -> dict:
+        """The whole deck as text (charts' numbers, units, axis titles, colours) + the source
+        facts -> findings across slides. Called by: revise.nodes.audit."""
+        from ..revise.prompts import AUDIT_SYSTEM
+
+        return self._chat(AUDIT_SYSTEM, json.dumps(payload, ensure_ascii=False))
 
     def review_slide(self, png: bytes, context: dict | None = None) -> dict:
         """Look at a rendered slide and say what a person would notice. -> {"ok", "problems"}
@@ -217,9 +231,15 @@ class StubAgentPlanner(StubPlanner):
 
     draw_slide = tweak_slide
 
+    def deck_code(self, payload: dict, pngs: list) -> dict:
+        return {"code": "def build(prs, ctx):\n    pass\n", "explanation": "no change (offline)"}
+
     def review_changes(self, payload: dict, pngs: list) -> dict:
         return {"slides": [{"slide": s["slide"], "ok": True, "problems": []}
                            for s in payload.get("slides") or []]}
+
+    def audit_deck(self, payload: dict) -> dict:
+        return {"findings": []}
 
     def route(self, instruction: str, context: dict) -> dict:
         """Offline routing: the rules alone (rules_route).

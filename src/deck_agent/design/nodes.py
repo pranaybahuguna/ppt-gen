@@ -48,7 +48,10 @@ def storyline(state: DeckState, planner=None, log=print) -> dict:
     frame = [{"spec": spec, "plan": plan} for spec, plan in frame_specs(story)]
     with workspace(state) as ws:
         ws.publish_json(story, "storyline.json")       # a record of the run, not state: tidy may drop it
+    from .profile import palette_asked
+
     return {"story": story, "outline": story, "deck_frame": frame, "template": template,
+            "palette": palette_asked(state.get("instruction") or "", state.get("palette")),
             "slide_specs": CLEAR,
             "trace": [step("storyline", slides=len(frame), lint=len(story.get("lint") or []))]}
 
@@ -85,7 +88,8 @@ def after_approval(state: DeckState):
         return "decline"
     sends = [Send("write", {"thread_id": state.get("thread_id"), "run_id": state.get("run_id"),
                             "index": i, "plan": f["plan"], "story": state.get("story"),
-                            "pack": state.get("content_pack"), "template": state.get("template")})
+                            "pack": state.get("content_pack"), "template": state.get("template"),
+                            "palette": state.get("palette")})
              for i, f in enumerate(state.get("deck_frame") or []) if f.get("plan")]
     return sends or "build"
 
@@ -101,12 +105,13 @@ def write(payload: dict, planner=None, log=print) -> dict:
     """
     from ..nodes.common import workspace
     from .plan import write_spec
-    from .profile import extract_profile
+    from .profile import extract_profile, with_palette
 
     with workspace(payload) as ws:
         template = ws.fetch(payload["template"], f"write-{payload['index']}-template.pptx")
+        P = with_palette(extract_profile(template), payload.get("palette"))
         spec, problems, tries = write_spec(payload["plan"], payload["story"] or {}, payload["pack"] or {"facts": []},
-                                           planner, template, extract_profile(template))
+                                           planner, template, P)
     log(f"  write slide {payload['index'] + 1}: {tries} tr{'y' if tries == 1 else 'ies'}"
         + (f", {len(problems)} note(s)" if problems else ""))
     return {"slide_specs": [{"index": payload["index"], "spec": spec, "problems": problems, "tries": tries}],
@@ -125,7 +130,7 @@ def build(state: DeckState, log=print) -> dict:
     """
     from ..nodes.common import make_previews, publish_version, workspace
     from .plan import _fallback
-    from .profile import extract_profile
+    from .profile import extract_profile, with_palette
     from .render import render_deck
 
     frame = state.get("deck_frame") or []
@@ -142,14 +147,15 @@ def build(state: DeckState, log=print) -> dict:
         notes += [f"slide {i + 1}: {p}" for p in w.get("problems") or []]
         plan = f["plan"]
         ask = f"A slide that makes this point: {plan.get('title')}. Its job: {plan.get('job')}"
-        tasks.append({"id": f"s{i + 1}", "kind": "redesign", "slide": i + 1, "instruction": ask, "round": 0})
+        tasks.append({"id": f"s{i + 1}", "kind": "redesign", "slide": i + 1, "instruction": ask, "round": 0,
+                      "person_asked": state.get("instruction") or ""})
         changed.append({"task": f"s{i + 1}", "kind": "redesign", "instruction": ask, "slide": i + 1, "was": None})
         changelog.append({"slide": i + 1, "change": f"new slide: {spec.get('title')}",
                           "drawn_with": [it.get("piece") for r in spec.get("rows") or [] for it in r.get("items") or []]})
     with workspace(state) as ws:
         template = ws.fetch(state["template"], "template.pptx")
         out = ws.path("deck.pptx")
-        drawn = render_deck(template, specs, out, extract_profile(template))
+        drawn = render_deck(template, specs, out, with_palette(extract_profile(template), state.get("palette")))
         uri, versions = publish_version(state, ws, "deck.pptx")
         ws.publish_json({"story": state.get("story"), "specs": specs}, "specs.json")
         previews, why = make_previews(state, ws, out)

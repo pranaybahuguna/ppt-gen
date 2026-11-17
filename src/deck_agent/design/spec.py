@@ -16,7 +16,7 @@ import re
 PIECE_RULES: dict[str, dict] = {
     "kpis": {"list": ("items", 2, 4), "fields": {"value": 8, "label": 40}, "required": ["value", "label"],
              "span": 12, "use": "2-4 headline numbers in cards; value is the number itself (e.g. '20/hr'), "
-                                "label says what it is. tone per item: primary|primary_dark|accent|alert"},
+                                "label says what it is. tone per item: one of the colour names in \"tones\" (alert = a bad number)"},
     "chart": {"list": ("categories", 2, 12), "fields": {"heading": 60, "x_title": 30, "y_title": 30}, "span": 6,
               "use": "a native chart. kind: column|bar|line|stacked|doughnut; categories (labels, <=18 chars); "
                      "series [{name, values}] (1-3 series, numbers only); highlight [indices of bars in the "
@@ -33,7 +33,7 @@ PIECE_RULES: dict[str, dict] = {
     "cards": {"list": ("items", 2, 6), "fields": {"value": 6, "heading": 32, "text": 130},
               "required": ["heading"], "span": 8,
               "use": "a grid of cards, each an optional big value, a heading and a short text; "
-                     "tone 'accent' on one item marks the recommended one"},
+                     "tone 'accent' on one item marks the recommended one (any name in \"tones\")"},
     "compare": {"list": ("columns", 1, 3), "fields": {"label": 22}, "span": 4,
                 "use": "1-3 columns under coloured labels (before/after, options); each column "
                        "{label, points: [2-5 sentences of <=90 chars]}. One column is a labelled "
@@ -238,3 +238,9 @@ def unsourced(spec: dict, source_text: str) -> list[str]:
     have = {_plain(m.group()) for m in _NUM.finditer(source_text)}
     small = {str(i) for i in range(0, 11)}            # counts and list numbers are not claims
     return sorted(n for n in numbers_in(spec) if n not in have and n not in small)
+
+
+def tone_names(P: dict) -> list[str]:
+    """The colour names a spec may use for "tone" with this profile and palette."""
+    return [k for k in P["colours"] if not k.endswith("_light")
+            and k not in ("text", "muted", "line", "panel", "card")]

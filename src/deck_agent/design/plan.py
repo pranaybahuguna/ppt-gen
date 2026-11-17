@@ -23,7 +23,7 @@ from pptx import Presentation
 from ..settings import settings
 from .profile import extract_profile
 from .render import _clear_slides, _no_full_stop, add_spec_slide, render_deck
-from .spec import META, unsourced, validate
+from .spec import META, tone_names, unsourced, validate
 
 VISUALS = {"numbers", "chart", "big_number", "comparison", "sequence", "timeline", "table", "cards",
            "matrix", "statement", "points"}
@@ -189,7 +189,8 @@ def write_spec(plan: dict, story: dict, pack: dict, planner, template, P: dict,
                         "titles": [s.get("title") for s in story.get("slides") or []]},
                "slide": {k: plan.get(k) for k in ("title", "job", "visual", "section")},
                "facts": [{"id": f["id"], "text": f["text"]} for f in cited],
-               "dataset": data}
+               "dataset": data, "tones": tone_names(P),
+               "palette": P.get("palette", "brand")}
     tried: list[tuple[dict, list[str]]] = []
     for _ in range(attempts):
         # A model call that fails is not a bad slide: it raises, so the run stops with the

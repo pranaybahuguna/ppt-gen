@@ -85,7 +85,10 @@ class Settings:
     router_confidence_floor: float = 0.6        # below this the graph asks the user
     approve_outline: bool = False               # pause for a human before building
     review_changes: bool = True                 # a vision model looks at new and changed slides
-    revision_rounds: int = 1                    # ... and sends unhappy ones back this many times
+    revision_rounds: int = 3                    # ... and sends unhappy ones back up to this many times
+    audit_deck: bool = True                     # then the whole deck is checked across slides: chart
+                                                # formats and colours and title sizes fixed by code,
+                                                # units and facts checked by one model call
     vision_review: bool = False                 # look at each rendered slide with a vision
                                                 # model and feed what it sees back as findings
     vision_workers: int = 4

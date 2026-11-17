@@ -332,7 +332,7 @@ def cmd_attach(args) -> int:
     uri = _upload_if_local(args.deck)
     text = args.instruction or "what can you do with this deck?"
     result = recorded("attach", args.id, {"file": uri, "instruction": text},
-                      lambda: facade.ask_deck(args.id, text, attachments=[uri], source_deck=uri))
+                      lambda: facade.attach_deck(args.id, uri, text))
     _p(result)
     return 0 if result.get("ok") else 1
 

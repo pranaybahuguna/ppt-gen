@@ -13,6 +13,8 @@ Called by: revise.work, revise.nodes.split.
 """
 from __future__ import annotations
 
+import re
+
 from pptx.enum.shapes import MSO_SHAPE_TYPE, PP_PLACEHOLDER
 
 EMU = 914400
@@ -62,6 +64,57 @@ def _chart(sh) -> dict:
             "series": [{"name": s.name, "values": [v for v in s.values]} for s in plot.series]}
 
 
+def _chart_format(ch) -> dict:
+    """How a chart is drawn - what a person sees and complains about ("the numbers on the bars are
+    unreadable"): value labels, legend, axes, bar spacing. Read defensively: a chart made
+    elsewhere may lack any of it.
+    """
+    def rgb(font):
+        try:
+            return str(font.color.rgb) if font.color and font.color.type is not None else None
+        except (AttributeError, TypeError, ValueError):
+            return None
+
+    plot = ch.plots[0]
+    out: dict = {}
+    try:
+        if plot.has_data_labels:
+            dl = plot.data_labels
+            pos = None
+            try:
+                pos = str(dl.position).split(".")[-1].split(" ")[0].lower() if dl.position is not None else None
+            except (ValueError, KeyError):
+                pass
+            out["value_labels"] = {"shown": True, "font_pt": dl.font.size.pt if dl.font.size else None,
+                                   "colour": rgb(dl.font), "bold": dl.font.bold, "position": pos,
+                                   "number_format": dl.number_format}
+        else:
+            out["value_labels"] = {"shown": False}
+    except (AttributeError, ValueError):
+        pass
+    try:
+        out["series_colours"] = [str(srs.format.fill.fore_color.rgb) if srs.format.fill.type == 1 else None
+                                 for srs in plot.series]
+    except (AttributeError, TypeError, ValueError):
+        pass
+    try:
+        out["legend"] = str(ch.legend.position).split(".")[-1].split(" ")[0].lower() if ch.has_legend else None
+    except (AttributeError, ValueError):
+        pass
+    for name in ("value_axis", "category_axis"):
+        try:
+            ax = getattr(ch, name)
+            out[name] = {"visible": ax.visible,
+                         "font_pt": ax.tick_labels.font.size.pt if ax.tick_labels.font.size else None}
+        except (AttributeError, ValueError):
+            pass
+    try:
+        out["gap_width"] = plot.gap_width
+    except AttributeError:
+        pass
+    return out
+
+
 def slide_content(slide) -> dict:
     """What a slide says, for rebuilding it: no positions, no styling.
 
@@ -104,7 +157,7 @@ def slide_shapes(slide) -> list[dict]:
             e["text"] = sh.text_frame.text.strip()[:300]
             e["font_pt"] = _font_pt(sh)
         if sh.has_chart:
-            e["chart"] = _chart(sh)
+            e["chart"] = {**_chart(sh), "format": _chart_format(sh.chart)}
         if sh.has_table:
             e["table"] = [[c.text.strip()[:60] for c in row.cells] for row in sh.table.rows][:10]
         fill = _fill(sh)
@@ -114,15 +167,60 @@ def slide_shapes(slide) -> list[dict]:
     return out
 
 
+#: Roles a slide can have. Deck-wide rules ("align every title") apply to "content" slides only,
+#: unless a request names the others: a cover, a section divider or an agenda is designed
+#: differently on purpose.
+ROLES = ("cover", "section", "agenda", "content", "closing")
+_AGENDA = re.compile(r"^\s*(agenda|contents|table of contents|in this deck|overview|outline)\b", re.I)
+_NUMBER = re.compile(r"^\s*\d{1,2}\s*$")
+
+
+def slide_role(slide, number: int, total: int, content_layout: str) -> str:
+    """What a slide is for, from how it is built: cover, section, agenda, content or closing.
+
+    The deck's main layout (the one most of its slides use) marks content slides; a slide on
+    another layout, or one that is mostly a full-bleed panel with a big number, is a cover,
+    divider or closing. Works on any deck, ours or hand-made.
+    Called by: deck_outline; revise.house.
+    """
+    layout = slide.slide_layout.name.lower()
+    title = slide.shapes.title
+    title_text = title.text_frame.text.strip() if title is not None else ""
+    texts = [sh.text_frame.text.strip() for sh, _ in _leaves(slide.shapes)
+             if sh.has_text_frame and sh.text_frame.text.strip() and not _is_chrome(sh)]
+    W, H = slide.part.package.presentation_part.presentation.slide_width, \
+        slide.part.package.presentation_part.presentation.slide_height
+    big_panel = any((sh.width or 0) * (sh.height or 0) > 0.6 * W * H
+                    for sh, _ in _leaves(slide.shapes) if not sh.has_text_frame or not sh.text_frame.text.strip())
+    if "section" in layout:
+        return "section"
+    if slide.slide_layout.name == content_layout and title_text:
+        return "agenda" if _AGENDA.match(title_text) else "content"
+    if number == 1 or "title slide" in layout:
+        return "cover"
+    if any(_NUMBER.match(t) for t in texts) and (big_panel or title is None):
+        return "section"
+    if number == total and len(" ".join(texts).split()) < 25:
+        return "closing"
+    if big_panel:
+        return "section"
+    return "content" if title_text else "section"
+
+
 def deck_outline(prs) -> list[dict]:
-    """One line per slide: number, title, a taste of the text, what visuals it carries.
+    """One line per slide: number, role, title, a taste of the text, what visuals it carries.
 
     Called by: revise.nodes.split.
     """
+    from ..design.profile import _content_layout
+
+    main = _content_layout(prs).name
+    total = len(prs.slides)
     out = []
     for n, slide in enumerate(prs.slides, start=1):
         c = slide_content(slide)
         words = " ".join(t["text"] for t in c["texts"]).split()
-        out.append({"slide": n, "title": c["title"][:120], "text": " ".join(words[:40]),
-                    "charts": len(c["charts"]), "tables": len(c["tables"]), "pictures": c["pictures"]})
+        out.append({"slide": n, "role": slide_role(slide, n, total, main), "title": c["title"][:120],
+                    "text": " ".join(words[:40]), "charts": len(c["charts"]),
+                    "tables": len(c["tables"]), "pictures": c["pictures"]})
     return out

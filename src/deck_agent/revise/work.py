@@ -17,7 +17,7 @@ from pathlib import Path
 from pptx import Presentation
 
 from ..design.plan import dry_run
-from ..design.spec import validate
+from ..design.spec import tone_names, validate
 from .read import deck_outline, slide_content, slide_shapes
 
 #: A request that asks for numbers to be made up: then they may be, and they are labelled.
@@ -74,14 +74,15 @@ def redesign(task: dict, deck: Path, P: dict, planner, workdir: Path, attempts: 
     n = task["slide"]
     if task["kind"] == "add":
         content, png = None, None
-        payload = {"request": task["instruction"], "slide": None,
+        payload = {**_asked(task), "slide": None,
                    "deck": [{"slide": o["slide"], "title": o["title"]} for o in deck_outline(prs)],
                    "goes_after": n}
     else:
         content = slide_content(prs.slides[n - 1])
         png = slide_picture(deck, n - 1, workdir / f"s{n}")
-        payload = {"request": task["instruction"], "slide_number": n, "slide": content,
+        payload = {**_asked(task), "slide_number": n, "slide": content,
                    "deck_title": slide_content(prs.slides[0])["title"] if len(prs.slides) else ""}
+    payload["tones"], payload["palette"] = tone_names(P), P.get("palette", "brand")
     if feedback:
         payload["feedback"] = feedback
         if task.get("previous"):
@@ -126,7 +127,7 @@ def tweak(task: dict, deck: Path, P: dict, planner, workdir: Path, attempts: int
     draw = task["kind"] == "draw"
     if draw:                      # a free redraw of the content area, in the deck's own colours
         ctx.update({"body_in": P["area"], "colours": P["colours"], "font": P["font"]})
-    payload = {"request": task["instruction"], "slide_number": n, **ctx,
+    payload = {**_asked(task), "slide_number": n, **ctx,
                "shapes": slide_shapes(prs.slides[n - 1])}
     if draw:
         payload["content"] = slide_content(prs.slides[n - 1])
@@ -157,6 +158,46 @@ def tweak(task: dict, deck: Path, P: dict, planner, workdir: Path, attempts: int
     return {**_base(task), "ok": False, "problems": last}
 
 
+def deck_change(task: dict, deck: Path, P: dict, planner, workdir: Path, attempts: int = 3,
+                feedback: list[str] | None = None) -> dict:
+    """One piece of code for many slides (a consistency request), tried in the sandbox.
+
+    The model sees a few sample slides, not all of them, and writes code that loops over
+    ctx["slides"]. The same geometry check as a tweak runs on every slide it touched.
+    Called by: revise.nodes.work.
+    """
+    from ..sandbox.code import run_builder
+
+    prs = Presentation(str(deck))
+    slides = [n for n in task["slides"] if 1 <= n <= len(prs.slides)]
+    sample = sorted({slides[0], slides[len(slides) // 2], slides[-1]})
+    ctx = {"slides": [n - 1 for n in slides], "slide_w_in": round(prs.slide_width / 914400, 3),
+           "slide_h_in": round(prs.slide_height / 914400, 3), "colours": P["colours"], "font": P["font"]}
+    payload = {**_asked(task), "applies_to_slides": slides,
+               "samples": [{"slide": n, "shapes": slide_shapes(prs.slides[n - 1])} for n in sample],
+               "slide_w_in": ctx["slide_w_in"], "slide_h_in": ctx["slide_h_in"],
+               "colours": P["colours"], "font": P["font"]}
+    if feedback:
+        payload["feedback"] = feedback
+    pngs = [p for p in (slide_picture(deck, n - 1, workdir / f"s{n}") for n in sample[:2]) if p]
+    last = ["no code was written"]
+    for k in range(attempts):
+        answer = planner.deck_code(payload, pngs)
+        code = (answer or {}).get("code") or ""
+        result = run_builder(code, ctx, deck)
+        if result.ok and result.slides_after == result.slides_before:
+            clashes = [f"slide {n}: {p}" for n in slides
+                       for p in _new_geometry_problems(deck, result.deck, n - 1)][:8]
+            if not clashes or k == attempts - 1:
+                return {**_base(task), "ok": True, "code": code, "ctx": ctx, "slides": slides,
+                        "changes": (answer or {}).get("explanation"), "problems": clashes}
+            last = clashes
+        else:
+            last = result.feedback() if not result.ok else ["the code added or removed slides"]
+        payload = {**payload, "previous_code": code, "feedback": last}
+    return {**_base(task), "ok": False, "slides": slides, "problems": last}
+
+
 def _new_geometry_problems(before: Path, after: Path, index: int) -> list[str]:
     """Overflow and overlapping text on one slide that were not there before the code ran,
     phrased for the model. Problems the slide already had (a hand-made deck may have some) are
@@ -177,6 +218,16 @@ def _new_geometry_problems(before: Path, after: Path, index: int) -> list[str]:
             out.append(f"text overflows its box ({f.get('ref')}): it needs {f.get('ratio', 0):.0%} of the "
                        "space it has - make the box bigger or the text shorter")
     return out[:6]
+
+
+def _asked(task: dict) -> dict:
+    """The task as split wrote it, and the person's own words beside it - a worker that sees only
+    split's version can be sent after the wrong problem (it once "fixed spelling" on a chart
+    whose labels were unreadable)."""
+    out = {"request": task["instruction"]}
+    if task.get("person_asked") and task["person_asked"] != task["instruction"]:
+        out["person_asked"] = task["person_asked"]
+    return out
 
 
 def _base(task: dict) -> dict:

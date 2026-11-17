@@ -87,8 +87,10 @@ flowchart TD
     approve_outline -->|one per slide, in parallel| write --> build --> review
     route -->|edit| split
     split -->|one per task, in parallel| work --> join --> review
-    review -->|weak slides, once| work
-    review -->|done| deliver
+    review -->|weak slides| work
+    review -->|done| audit
+    audit -->|findings, once per slide| work
+    audit -->|done| deliver
     route -->|translate| translate_plan --> translate_apply --> look
     look -->|text overflows| translate_repair --> translate_apply
     look -->|done| deliver
@@ -105,7 +107,7 @@ flowchart TD
     classDef stop fill:#fce4ec,stroke:#d81b60,color:#880e4f
     classDef terminal fill:#eceff1,stroke:#546e7a,color:#263238
 
-    class intake,route,review,deliver shared
+    class intake,route,review,audit,deliver shared
     class gather,storyline,approve_outline,write,build create
     class split,work,join edit
     class translate_plan,translate_apply,look,translate_repair translate
@@ -135,7 +137,8 @@ node LangGraph also saves the state in Postgres (a checkpoint) - not repeated in
 | `split` | turns an edit request into one task per slide | yes | - |
 | `work` ×N | does one task: redesign (a new spec), draw or tweak (code, tried in the sandbox) | yes, per task | - |
 | `join` | applies every task's result in one pass; untouched slides keep their bytes | - | `<deck_id>/vNNN.pptx`, previews |
-| `review` | a vision model compares each new or changed slide with what was asked; weak ones go round once more | yes | - |
+| `review` | a vision model compares each new or changed slide with what was asked; weak ones go round again (up to `revision_rounds`) | yes | - |
+| `audit` | the deck check: the whole deck once more, across slides. Code fixes chart number formats (8 shown as 800%), chart colours (one per category on every slide, distinct within a chart, on the palette) and content title sizes; it finds text too small to read. One text-only model call checks every chart's units, axis titles and numbers, and the slides against the source facts. Slides with findings go back to `work` once; the rest are warnings | yes, once per request | `<deck_id>/vNNN.pptx` when it fixed something |
 | `translate_plan` | translates the text, keeping formatting | yes | `run/translate_plan.json` |
 | `translate_apply` | applies the translation, checks | - | `<deck_id>/vNNN.pptx`, previews |
 | `look` | a vision model looks at a translation (if `vision_review` is on) | yes, if on | - |
@@ -335,7 +338,7 @@ the job object below - `202` while it runs, `200` when finished (or with `?wait=
 | `POST /decks/{deck_id}/translate` | `lang`; optional `slides` (1-based list) | job; deck result |
 | `POST /decks/{deck_id}/ask` | `instruction` - the router decides what it is | job; deck result, or `{question}` |
 | `POST /decks/{deck_id}/answer` | `text` - answers the question the last run asked | job; deck result |
-| `POST /decks/{deck_id}/attach` | file `file` (a .pptx from elsewhere); optional `instruction` | job; deck result |
+| `POST /decks/{deck_id}/attach` | file `file` (a .pptx from elsewhere, or a hand-edited copy of this deck); optional `instruction` | job; deck result. The file becomes the deck's newest version and the instruction runs on it; `undo` can go back past it |
 | `POST /decks/{deck_id}/undo` | - | `{ok, deck, dropped, versions}`; recorded as an `undo` job |
 | `GET /decks` | - | `{decks: [{deck_id, title, status, template, current_file, jobs, created_at, updated_at, download_url}]}`, latest change first (the `decks` table) |
 | `GET /decks/{deck_id}` | - | the deck's row (`title, status, current_file, ...`) and its conversation: `{exists, versions, version_urls, download_url, template, turn, trace, pending_question}` |
@@ -477,10 +480,12 @@ which is synchronous (python-pptx, LibreOffice and model calls), in worker threa
 The checkpointer stays LangGraph's `PostgresSaver` on psycopg: it is used from inside the graph,
 which runs in those threads.
 
-**Versions.** Each version is a whole copy of the deck (16-22 MB with a picture-heavy template).
-`keep_versions` (2 in the example config) keeps the newest two after each turn - the current
-one, and the one `undo` goes back to - and deletes the rest. Numbering carries on from the
-newest (`v007` follows `v006` even when `v001`-`v005` are gone). `0` keeps every version.
+**Versions.** Each version is a whole copy of the deck (16-22 MB with a picture-heavy template),
+and there is **one version per request**: a request that went round twice (a first pass, then
+the pass the review asked for) keeps only its last, so `undo` always goes back exactly one
+request. `keep_versions` (2 in the example config) then keeps the newest two - the current deck,
+and the one `undo` goes back to - and deletes the rest. Numbering carries on from the newest
+(`v007` follows `v006` even when `v001`-`v005` are gone). `0` keeps every request's version.
 
 ## Using it from another program
 
@@ -533,7 +538,8 @@ make graph     # prints it as mermaid, from the code
 ```
 intake → route ─┬─ create:    gather → storyline → approve_outline → write ×N → build → review
                 ├─ edit:      split → work ×N → join → review
-                │             review → work ×N → join → review   (weak slides, once) → deliver
+                │             review → work ×N → join → review   (weak slides) → audit
+                │             audit → work ×N → join → review → audit   (findings, once per slide) → deliver
                 ├─ translate: translate_plan → translate_apply → look → (translate_repair …) → deliver
                 ├─ ask:       stops (interrupt) and waits for `answer`, then routes again
                 └─ decline:   says why
@@ -565,8 +571,10 @@ takes; the same table is what the model is shown.
 **The checks** - all advice, never gates. On a spec: its shape and limits, numbers that are not
 in the facts (create), text that had to shrink below a comfortable size, an action title that
 only labels the slide. On code: text the change made overflow or collide. On every new or changed
-slide: the vision review, with the before picture when there was one. Each problem goes back to
-the model; the best attempt is kept; what is left arrives as a warning. In an edit, numbers may
+slide: the vision review, with the before picture when there was one. On the whole deck, last:
+the deck check (`audit`), for what only shows across slides or in a chart's numbers - see
+`src/deck_agent/revise/audit.py`. Each problem goes back to the model; the best attempt is
+kept; what is left arrives as a warning. In an edit, numbers may
 be made up when the request asks for them - the slide then says they are illustrative.
 
 **Model-written code** (a tweak, or a drawing) runs in a throwaway container with no network,
@@ -584,7 +592,8 @@ slide as it was, and says so.
 |---|---|---|
 | `default_template` | set by `template --make-default` | the template a deck uses when none is named |
 | `review_changes` | `true` | a vision model looks at every new or changed slide |
-| `revision_rounds` | `1` | how many times weak slides go round again after review |
+| `revision_rounds` | `3` | how many times weak slides go round again after review; what is still wrong after that is a warning |
+| `audit_deck` | `true` | the deck check after review: code fixes chart formats, chart colours and title sizes; a model checks units and numbers |
 | `vision_review` | `false` | look at every slide of a translation |
 | `approve_outline` | `false` | stop after the storyline and wait for an `answer` |
 | `keep_versions` | `2` | deck versions kept after each turn; `0` keeps them all |
@@ -639,7 +648,7 @@ machines' `s3_endpoint` and `pg_dsn` at shared services.
 ```
 src/deck_agent/        the agent: graph, state, nodes, model layer, sandbox clients, storage
 src/deck_agent/design/ create: design profile, text measuring, pieces, renderer, specs, storyline
-src/deck_agent/revise/ edit: reading any slide, slide surgery, split / work / join / review
+src/deck_agent/revise/ edit: reading any slide, slide surgery, split / work / join / review, the deck check
 src/deck_agent/server.py   the MCP + REST server (deckops serve)
 src/deck_agent/db/     the decks and jobs tables: models, async engine, every read and write
 engine/deckops/        the engine: translation, byte-preserving saves, geometry checks
