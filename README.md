@@ -22,9 +22,15 @@ split into **one task per slide**, done in parallel - a *redesign* rebuilds a sl
 content, a *draw* redraws it as a custom visual with model-written code, a *tweak* changes it in
 place with code - and joined into one new version in which every slide nobody touched keeps its
 original bytes. **Both** end with a vision model comparing each new or changed slide (before and
-after) with what was asked, and sending weak ones round once more. Checks are advice, not gates:
+after) with what was asked, and sending weak ones round again (up to three times), and then a
+**deck check** across all slides: chart number formats, chart colours and title sizes fixed by
+code, units and numbers checked against the facts by a model. Checks are advice, not gates:
 problems go back to the model, the best attempt is kept, and what is left is reported as a
 warning. Every turn is checkpointed in Postgres; every file lives in S3.
+
+[Step by step](#step-by-step-what-happens-what-goes-in-what-comes-out) follows one request
+through every node, with what goes in and comes out; [Pieces or code](#pieces-or-code-who-draws-a-slide)
+says when a slide is drawn from building blocks and when the model writes code for it.
 
 ## The pieces
 
@@ -206,6 +212,274 @@ erDiagram
         bytea blob "what a node returned"
     }
 ```
+
+## Step by step: what happens, what goes in, what comes out
+
+This section follows one request through the graph, node by node. For each step it says what
+the step is given, what it decides, what it hands on, and where its output is kept. The state
+(the `DeckState` fields named in `code` below) is saved in Postgres after every node, and every
+file goes to S3; `run/` means `<deck_id>/<run_id>/`.
+
+### Every request starts the same way
+
+**0. The caller.** `POST /decks` (create) or `POST /decks/<id>/<action>` (`edit`,
+`translate`, `attach`, ...; [every endpoint](#every-rest-endpoint)), or the same as MCP tools. The server stores any uploaded file in S3 under
+`uploads/`, writes a `jobs` row (`queued`), answers `202 {job_id, deck_id}` at once, and runs the
+graph in a worker thread. The graph is started with:
+
+```json
+{"instruction": "make slide 3 more visual and fix the typo on slide 6",
+ "attachments": ["s3://deckops/uploads/<hash>-deck.pptx"],
+ "context_docs": ["s3://deckops/uploads/<hash>-notes.md"],
+ "content_pack": null}
+```
+
+On an existing deck the request's own fields are reset first (`state.turn_reset`): last
+request's tasks, notes and previews are cleared; the deck's versions, its template, its
+storyline, its facts and its palette stay.
+
+**1. `intake`** - gives the turn a run id; checks every attached file before anything opens it
+(it is untrusted input) and sorts attachments: a deck to work on becomes `source_deck`; a
+template becomes `template`.
+
+**2. `route`** - decides what the request is. Plain rules first, no model:
+
+| The request | Route |
+|---|---|
+| there is no deck yet | create |
+| names a language ("into French") | translate |
+| "restyle slide 3" (one slide, same template) | edit |
+| "restyle onto the new template" | declined, with a reason |
+| an editing verb, or slide numbers | edit |
+| anything else, while a deck exists | the model decides |
+
+The model is asked only when the rules are unsure (confidence under `router_confidence_floor`,
+0.6). If it is unsure too, the graph stops and asks you (`ask`, a LangGraph interrupt) - at most
+twice, then it declines. Out: `route`, `route_reason`, `route_by` ("rules" or "model"),
+`slide_scope`, `target_lang`.
+
+### Create: from context to a finished deck
+
+**3. `gather`** - *what the deck may say.*
+In: the request and the context documents (Markdown, text, CSV, JSON, .docx), cut into pieces of
+at most 20,000 characters and read in parallel. The model returns facts, each with the words in
+the source that support it; plain code then looks for those words in the source and **drops
+every fact whose quote is not there**. Fewer than 3 facts left: it asks you for more. A caller
+that passes `content_pack` skips this step.
+Out: `content_pack` (kept for the deck's life; later requests and the deck check use it), and
+`run/content_pack.json` and `run/gather_report.json` (what was kept, what was dropped and why,
+what the request needed that the context did not say):
+
+```json
+{"facts": [{"id": "F7", "text": "Electric vans cost EUR 0.22 per km to run",
+            "source": "brief.md", "quote": "running cost per km: electric 0.22"}],
+ "datasets": {"D4": {"categories": ["Electric", "Hybrid", "Diesel"], "values": [0.22, 0.33, 0.41]}},
+ "gaps": ["no figure for charging-point costs"]}
+```
+
+**4. `storyline`** - *the argument, before any slide exists.*
+In: the request, the facts (id and text), the datasets, how many slides (`slides_wanted`,
+default 8-12). The model plans the deck: its title, its sections, and per content slide an
+*action title* (the slide's point as a sentence), its job, the visual that makes the point
+(numbers, chart, big number, comparison, sequence, timeline, table, cards, ...), and the facts it
+stands on. Plain code checks the plan - titles that only label ("Overview of costs"), titles over
+85 characters, a visual that does not exist, facts that do not exist, a slide with no facts - and
+the model revises it once if anything is wrong. The palette is decided here from the request's
+words: "brand" (the template's colours) or "extended" (more colour was asked for).
+Then code frames the deck: a **cover** (title and agenda), and a **section divider** before each
+section when there are 8 or more slides in 2 or more sections. Covers and dividers are drawn by
+code from the storyline; no model writes them.
+Out: `story`, `deck_frame`, `palette`, `run/storyline.json`.
+
+**5. `approve_outline`** - off by default (`approve_outline`). When on, the graph stops with the
+list of action titles and waits for "yes"; anything else stops the request. Reading a dozen
+titles takes seconds; changing your mind here is free.
+
+**6. `write` ×N** - *one model call per content slide, all at once (LangGraph `Send`).*
+In: the deck's title, sections and every slide's title (so slides do not repeat each other);
+this slide's plan; **only the facts this slide cites**; its dataset; the colour names it may use.
+The model writes a *slide spec* (the words, and which pieces show them - see
+[A slide spec](#the-graph)). Three checks, in plain code:
+
+1. *shape and limits* (`design/spec.validate`): 1-3 rows; columns add up to at most 12; at most
+   110 words; the title states a point; a big number is a number; one short piece alone on a
+   slide is not enough;
+2. *numbers* (`unsourced`): every number on the slide must appear in the facts;
+3. *a dry run* (`dry_run`): the slide is drawn off-screen with the real fonts measured; text
+   that will not fit, or would have to shrink below a comfortable size, is a problem.
+
+Each problem goes back to the model as feedback, up to 3 tries; the try with the fewest problems
+is kept and what is left of them becomes a warning. A slide the model could not write at all gets
+a plain but correct fallback (its facts as points).
+Out: one `slide_specs` entry per slide.
+
+**7. `build`** - *every spec drawn on the template, by code.*
+In: the frame and the specs. `design/render.py` builds each slide on the template's own content
+layout (so its footer, page number and decoration come from the template), writes the title into
+the template's title box - anchored to the top, sized to fit two lines between 22 and 30pt - draws
+the rule under it, and lays the pieces out on a 12-column grid in the template's colours and font.
+Out: `<deck_id>/v001.pptx`, `run/specs.json`, a preview PNG of every slide, and - so the review
+can send weak slides round again - one `redesign` task per content slide (`edit_tasks`,
+`changed`). From here on a new deck goes through the same steps as an edit: review (10), and
+`work` and `join` (8, 9) for any slide the review sends back.
+
+### Edit: from a request to a new version
+
+**4. `split`** - *one request, many independent tasks.*
+In: the request, word for word, and a one-line outline of every slide: number, **role** (cover,
+section, agenda, content, closing - read from how the slide is built), title, its first 40 words,
+and how many charts, tables and pictures it has. The model sees no pictures here; it only decides
+**which slides** and **what kind of work** (next section). Example, for "make slide 3 more visual,
+fix the typo on slide 6 and line the titles up":
+
+```json
+{"tasks": [{"kind": "redesign", "slide": 3, "instruction": "Make the slide more visual: lead with the 62% figure ..."},
+           {"kind": "tweak", "slide": 6, "instruction": "Correct 'recieve' to 'receive' in the second card"},
+           {"kind": "align_titles", "slides": [], "instruction": "line the titles up"}],
+ "summary": "Slide 3 redesigned, a typo fixed on slide 6, titles aligned on content slides",
+ "palette": null, "question": null}
+```
+
+Then plain code: tasks naming slides that do not exist are dropped; a deck-wide task with no
+slides gets **every content slide, and never the cover, dividers, agenda or closing slide**
+unless the request named them; the person's own words (`person_asked`) are attached to every
+task, so no worker sees only the planner's paraphrase. Nothing left to do: declined, with the
+reason. Out: `edit_tasks`, `work_base` (the version this request starts from), `palette`.
+
+**8. `work` ×N** - *one task, done and checked on its own, all tasks at once.*
+What each kind gets and does - the next section says when each is chosen:
+
+| Kind | The model is given | It returns | Checked by code | Tries |
+|---|---|---|---|---|
+| `redesign` | what the slide says (title, texts, tables, chart data), **a picture of it**, the request, the colour names | a new spec | shape and limits, and the dry run on this deck (checks 1 and 3 of step 6; not the facts check - an edited slide's numbers are its own) | 3 |
+| `add` | the deck's titles, where the slide goes, the request | a new spec | the same | 3 |
+| `tweak` | **every shape** (id, kind, position, text, font size, fill; charts with data *and* format: labels, colours, axes), a picture, the request | python-pptx code | run in the sandbox: no error, same slide count, no new overflow or overlap | 3 |
+| `draw` | the same, plus the slide's content, its content area, the palette and the font | python-pptx code that redraws the content area | the same | 3 |
+| `deck` | sample slides (first, middle, last) with their shapes, two pictures, the request | **one** piece of code for every slide | the same, on every slide | 3 |
+| `align_titles`, `delete`, `move` | - (no model) | - | - | - |
+
+A redesign's numbers must stay the slide's own; invented numbers are allowed only when the
+request asks for made-up or illustrative ones, and the slide then says so in its footnote.
+Out: one `task_results` entry each (the spec or the working code, and any problems left).
+
+**9. `join`** - *everything applied in one pass, in a fixed order.*
+1. slide surgery (`revise/surgery.py`): redesigned slides replaced, new ones inserted, deleted
+   ones removed, moved ones moved - one pass, so slide numbers never shift under a task;
+2. `align_titles`, by fixed code: every target title into the template's title box, anchored to
+   the top, one rule under it at the standard height;
+3. `deck` code, once, on all its slides;
+4. each `tweak` and `draw` code, replayed on the slide **at its position now**.
+
+After each code step the slides it did not touch get their original bytes back (`reseal`), so a
+hand-edited slide nobody asked about is not even re-saved. A task that failed leaves its slide as
+it was and becomes a warning; the request fails only if nothing at all changed.
+Out: `<deck_id>/vNNN.pptx`, previews of the changed slides, `changed` (where each changed slide
+is now and where it was), `changelog`.
+
+### Both routes end the same way
+
+**10. `review`** - *a vision model looks at every new or changed slide.*
+In, per slide, in batches of 4 looked at in parallel: the picture **after**; the picture
+**before** (rendered from `work_base`) when the slide existed; what the person asked, in their
+words; the task as split wrote it; and whether the slide is made of pieces or of code (so it
+asks only for what that can do). Code adds two things of its own: a slide whose before and after
+pictures differ by fewer than 50 pixels has **not** been changed, whatever the reviewer thought;
+and what the checks in steps 6 and 8 left on a slide goes back with it.
+A slide it is unhappy with goes back to `work` (8) with the notes, while `edit_round` is under
+`revision_rounds` (3): a redesign is redesigned again - or **drawn by code** when the reviewer
+says the building blocks cannot do it; a tweak or a drawing gets another try of the same kind;
+a deck-wide task goes round as one task, with the notes from every sample slide. What is still
+wrong after the last round is a warning.
+
+**11. `audit`** - *the deck check: the whole deck once more, across slides.*
+Review looks at slides one by one; some problems only show across slides, or only in a chart's
+numbers. In: the whole current deck, its slide roles, its palette, its facts and the request.
+
+* Fixed by plain code, the same way every time (`revise/audit.py`):
+  * a chart whose numbers are already percentages but whose format multiplies them (8 shown as
+    800%) gets a literal % sign;
+  * chart colours, decided once for the deck: the same thing is the same colour on every slide
+    ("Electric" and "Electricity" are one thing), things in one chart are clearly different
+    colours, and every colour is on the palette (the brand's and its extended hues; greys stay);
+  * every content slide's title at the size most of them use, where it still fits two lines.
+* Found by plain code: text smaller than anything the template itself uses.
+* Found by **one text-only model call** (once per request): every slide's text, tables and charts
+  (categories, series, values, axis titles, number formats, colours) next to the facts - a unit
+  or axis title that does not match the data, a number that contradicts the facts or another
+  slide, the same thing named two ways.
+
+If code fixed anything, a new version is published. Each slide with findings goes back to `work`
+as a `tweak`, **once per request**, while revision rounds are left; then review looks at it again.
+The rest are warnings (`audit: slide N: ...`). Switch it off with `audit_deck`.
+
+**12. `deliver`** - writes `run/manifest.json` (route and why, versions, tasks, every warning,
+the full trace, the settings that mattered) and returns:
+
+```json
+{"ok": true, "deck": "s3://deckops/voltline/v017.pptx", "url": "<a signed download link>",
+ "route": "edit", "version": 17, "versions": 2, "errors": [],
+ "changelog": [{"slide": 3, "change": "KPI cards and a bar chart instead of a text list",
+                "drawn_with": ["kpis", "chart"]},
+               {"slide": null, "change": "deck check: slide 8: chart colours Electricity 7A5195->87B049"}],
+ "warnings": ["slide 6: ...", "audit: slide 11: ..."],
+ "previews": ["s3://.../previews/slide-03.png"], "manifest": "s3://.../manifest.json"}
+```
+
+**After the graph** (`facade`, then the server): the versions this request made in between are deleted, so a
+request is **one** version and `undo` goes back exactly one request; versions beyond
+`keep_versions` are deleted; the `jobs` row becomes `done` (or `failed`) with this summary; the
+`decks` row points at the new file.
+
+## Pieces or code: who draws a slide
+
+There are three ways a slide gets drawn, and the system picks one per task.
+
+| | How | Used for | What it can and cannot do |
+|---|---|---|---|
+| **pieces** | the model writes a spec; `design/render.py` draws it | every new content slide; `redesign` and `add` in an edit | KPI cards, native charts, steps, points, cards, comparisons, timelines, tables, a big number, a statement, a 2×2, a bottom-line band. Every word is measured, so nothing overflows; only the template's colours and font. **No icons, arrows or free-form shapes.** |
+| **model-written code** | the model writes `build(prs, ctx)` in python-pptx; it runs in the sandbox | `tweak`, `draw` and `deck` in an edit; second passes the review or deck check asks for | anything python-pptx can do, on the slide as it is: edit one shape, recolour a chart, draw a diagram with arrows and shapes. Checked by running it, not by measuring a spec. |
+| **fixed code** | written once, here | covers and section dividers; `align_titles`; slide surgery; the deck check's fixes | always the same result; no model at all |
+
+**When code is chosen instead of pieces:**
+
+```mermaid
+flowchart TD
+    R[an edit request] --> S{split: what does it ask for?}
+    S -->|"a different look, layout or kind of visual<br/>('more visual', 'turn this box into a graph')"| RD[redesign: pieces]
+    S -->|"a small change that keeps the design<br/>(wording, a colour, a font size, one shape)"| TW[tweak: code]
+    S -->|"a visual pieces cannot make<br/>(icons, arrows, a cycle, a funnel, an architecture)"| DR[draw: code]
+    S -->|"the same rule on many slides<br/>('every chart label 12pt')"| DK[deck: one code for all]
+    S -->|"titles at one height, a line under them"| AT[align_titles: fixed code]
+    RD --> RV{review}
+    RV -->|"needs what the blocks cannot do"| DR
+    RV -->|"weak, but the blocks can fix it"| RD
+    TW --> RV2{review} -->|weak| TW
+    AU[deck check finds a problem on a slide] --> TW
+```
+
+* **split** chooses, from the request's words: prefer `tweak` when the request is small and the
+  design should stay; `redesign` when it is about the look, the structure or the kind of visual;
+  `draw` when the visual needs icons, arrows or a bespoke diagram; one `deck` or `align_titles`
+  task when the same rule must hold on many slides (one task, so every slide gets the *same*
+  change rather than each worker's own interpretation).
+* **review** escalates: when a pieces slide is weak *because* of what pieces cannot do, it answers
+  `redo_with: "custom_drawing"` and the next round is a `draw`.
+* **the deck check** always sends its findings back as `tweak` - a precise change to the slide as
+  it is (an axis title, a colour, a label).
+* **create** always starts with pieces; a new slide reaches code only through review's escalation.
+
+**How model-written code is kept safe and honest:**
+
+1. a static check of the code first: only allowed imports (`sandbox/guard.py`), no files, no
+   network, no subprocesses;
+2. it runs in a throwaway container: no network, read-only root, 512 MB, 60 seconds, one CPU,
+   destroyed afterwards;
+3. the result is checked: the slide count must not change, and text that now overflows or
+   collides (and did not before) goes back to the model with the error or the clash, up to 3
+   tries;
+4. `join` replays the working code on the merged deck and gives every other slide its original
+   bytes back;
+5. code that never works leaves the slide as it was, and the warning says so.
 
 ## Setting it up on a new machine
 
