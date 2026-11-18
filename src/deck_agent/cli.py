@@ -1,8 +1,8 @@
 """Command line. Enough to run, inspect and debug the whole thing without a host application.
 
     deckops doctor                       is everything this needs actually working?
-    deckops init                         create the checkpoint tables and the bucket
-    deckops seed                         put the sample template and content in the bucket
+    deckops init                         create the checkpoint tables and the store's folder
+    deckops seed                         put the sample template and content in the store
     deckops template <template.pptx>     check a template, read its look, store it in uploads/
     deckops create <id> "<brief>" ...    a new deck
     deckops edit <id> "<instruction>"    change the deck this session has
@@ -11,8 +11,8 @@
     deckops answer <id> "<text>"         answer a question the graph asked
     deckops session <id>                 what this session knows
     deckops undo <id>                    go back one version
-    deckops get <s3://...> <path>        fetch an artefact
-    deckops ls [prefix]                  list what is in the bucket
+    deckops get <local://...> <path>     fetch an artefact
+    deckops ls [prefix]                  list what is in the store
     deckops clean [...]                  delete decks, tidy them, or clear everything (dry run
                                          unless --yes)
     deckops graph                        print the graph as mermaid
@@ -46,7 +46,9 @@ def _upload_if_local(path_or_uri: str | None) -> str | None:
 
     Called by: cmd_attach, cmd_create, cmd_seed.
     """
-    if not path_or_uri or path_or_uri.startswith("s3://"):
+    from .infra.storage import is_ref
+
+    if not path_or_uri or is_ref(path_or_uri):
         return path_or_uri
     local = Path(path_or_uri)
     if not local.exists():
@@ -125,7 +127,7 @@ def cmd_doctor(args) -> int:
     try:
         st = store()
         st.ensure_bucket()
-        out["object_storage"] = {"ok": True, "bucket": st.bucket,
+        out["object_storage"] = {"ok": True, "store": str(getattr(st, "root", st.bucket)),
                                  "objects": len(st.list(""))}
     except Exception as e:
         problems.append(f"object storage: {e}")
@@ -164,7 +166,7 @@ def cmd_doctor(args) -> int:
 
 
 def cmd_init(args) -> int:
-    """`deckops init`: create the checkpoint tables, the decks and jobs tables, and the bucket.
+    """`deckops init`: create the checkpoint tables, the decks and jobs tables, and the store's folder.
     Idempotent.
 
     Called by: main(); `make init`, once after `make up`.
@@ -177,12 +179,12 @@ def cmd_init(args) -> int:
     print(f"decks and jobs tables ready in {url().split('@')[-1]}")
     st = store()
     st.ensure_bucket()
-    print(f"bucket ready: {st.bucket}")
+    print(f"store ready: {getattr(st, 'root', st.bucket)}")
     return 0
 
 
 def cmd_seed(args) -> int:
-    """Put the engine's own sample template and a small content pack in the bucket.
+    """Put the engine's own sample template and a small content pack in the store.
 
     Called by: main.
     """
@@ -261,7 +263,9 @@ def cmd_design(args) -> int:
 
     s = settings()
     template = args.template or s.default_template
-    if str(template).startswith("s3://"):
+    from .infra.storage import is_ref
+
+    if is_ref(str(template)):
         local = s.workspace_root / "design-template.pptx"
         local.write_bytes(store().get_bytes(template))
         template = local
@@ -356,7 +360,7 @@ def cmd_undo(args) -> int:
 
 
 def cmd_get(args) -> int:
-    """`deckops get <s3://...> <path>`. Downloads one object from the bucket.
+    """`deckops get <local://...> <path>`. Copies one object out of the store.
 
     Called by: main(), when that subcommand is given. Returns the process exit code.
     """
@@ -366,7 +370,7 @@ def cmd_get(args) -> int:
 
 
 def cmd_ls(args) -> int:
-    """The bucket, without needing the AWS CLI or its credentials set up.
+    """What is in the store, folder by folder.
 
     Called by: main.
     """
@@ -374,7 +378,7 @@ def cmd_ls(args) -> int:
 
     objs = store().objects(args.prefix or "")
     if not args.recursive:
-        # one line per "folder" at this level, like `aws s3 ls`
+        # one line per "folder" at this level
         depth = (args.prefix or "").count("/")
         folders: dict[str, list] = {}
         files = []
@@ -435,7 +439,7 @@ def cmd_clean(args) -> int:
                 print("\nDry run: nothing deleted. Add --yes to delete the above.")
             return 0
         done = cleanup.execute(st, saver, plan)
-    # The decks gone from the bucket and the checkpointer go from the tables too, with their jobs.
+    # The decks gone from the store and the checkpointer go from the tables too, with their jobs.
     gone = None if args.all else sorted(
         set(plan.threads) | {o.key.split("/", 1)[0] for o in plan.objects} - set(cleanup.SHARED))
     if args.all or (gone and not args.tidy):
@@ -504,7 +508,7 @@ def main(argv: list[str] | None = None) -> int:
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     sub.add_parser("doctor", help="check that everything this needs is working").set_defaults(fn=cmd_doctor)
-    sub.add_parser("init", help="create the checkpoint tables and the bucket").set_defaults(fn=cmd_init)
+    sub.add_parser("init", help="create the checkpoint tables and the store's folder").set_defaults(fn=cmd_init)
     sub.add_parser("seed", help="upload the sample template and content pack").set_defaults(fn=cmd_seed)
     sub.add_parser("graph", help="print the graph as mermaid").set_defaults(fn=cmd_graph)
     sv = sub.add_parser("serve", help="run the MCP + REST server")
@@ -523,7 +527,7 @@ def main(argv: list[str] | None = None) -> int:
     c = sub.add_parser("create", help="create a deck")
     c.add_argument("id", help="the deck session id (= the conversation)")
     c.add_argument("brief")
-    c.add_argument("--template", help="a .pptx path or an s3:// URI")
+    c.add_argument("--template", help="a .pptx path or a local:// reference")
     c.add_argument("--context", action="append", metavar="FILE",
                    help="a document the deck should be based on (.md .txt .docx ...). "
                         "Repeatable. The facts are written from it; see the gather node")
@@ -533,7 +537,7 @@ def main(argv: list[str] | None = None) -> int:
     dz = sub.add_parser("design", help="build a deck by the designed path (storyline, specs, pieces)")
     dz.add_argument("brief")
     dz.add_argument("--context", action="append", metavar="FILE", help="a source document; repeatable")
-    dz.add_argument("--template", help="a .pptx path or an s3:// URI (default: default_template)")
+    dz.add_argument("--template", help="a .pptx path or a local:// reference (default: default_template)")
     dz.add_argument("--out", required=True, help="where to write the .pptx")
     dz.add_argument("--slides", default="8-12", help="how many content slides, as a range")
     dz.add_argument("--specs", help="draw this specs JSON instead of planning (no model)")
@@ -562,7 +566,7 @@ def main(argv: list[str] | None = None) -> int:
 
     at = sub.add_parser("attach", help="give a session an existing deck")
     at.add_argument("id")
-    at.add_argument("deck", help="a .pptx path or an s3:// URI")
+    at.add_argument("deck", help="a .pptx path or a local:// reference")
     at.add_argument("instruction", nargs="?")
     at.set_defaults(fn=cmd_attach)
 
@@ -579,7 +583,7 @@ def main(argv: list[str] | None = None) -> int:
     g.add_argument("path")
     g.set_defaults(fn=cmd_get)
 
-    ls = sub.add_parser("ls", help="list the bucket")
+    ls = sub.add_parser("ls", help="list the store")
     ls.add_argument("prefix", nargs="?", help="e.g. my-deck/ ; omit for the top level")
     ls.add_argument("-r", "--recursive", action="store_true", help="every object, not folders")
     ls.set_defaults(fn=cmd_ls)
@@ -598,7 +602,7 @@ def main(argv: list[str] | None = None) -> int:
     cl.add_argument("--orphans", action="store_true",
                     help="files with no session, and sessions whose files are gone")
     cl.add_argument("--older-than", metavar="AGE", help="purge decks untouched for e.g. 7d, 12h")
-    cl.add_argument("--all", action="store_true", help="the whole bucket and every session")
+    cl.add_argument("--all", action="store_true", help="the whole store and every session")
     cl.add_argument("--keep-templates", action="store_true",
                     help="with --all: keep kits/ and uploads/ (ingested templates)")
     cl.add_argument("--yes", action="store_true", help="actually delete")

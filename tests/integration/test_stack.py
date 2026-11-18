@@ -1,4 +1,4 @@
-"""Postgres and object storage: the two things that make a conversation survive a restart.
+"""Postgres and the store: the two things that make a conversation survive a restart.
 
 These need `make up && make init` and skip themselves otherwise.
 """
@@ -8,15 +8,15 @@ import urllib.request
 
 import pytest
 
-from deck_agent.infra.storage import Ref, S3Store, sha256_file
+from deck_agent.infra.storage import FileStore, Ref, sha256_file
 
 pytestmark = pytest.mark.integration
 
 
-# --------------------------------------------------------------------------- object storage
+# --------------------------------------------------------------------------- the store
 
 def test_objects_round_trip(needs_stack, tmp_path, sample_deck, scratch_keys):
-    store = S3Store(needs_stack)
+    store = FileStore(needs_stack.store_root, needs_stack.store_name)
     scratch_keys.append("tests/round-trip.pptx")
     uri = store.put(sample_deck, "tests/round-trip.pptx")
     assert Ref.parse(uri).key == "tests/round-trip.pptx"
@@ -28,7 +28,7 @@ def test_objects_round_trip(needs_stack, tmp_path, sample_deck, scratch_keys):
 
 
 def test_json_round_trips_without_mangling_unicode(needs_stack, scratch_keys):
-    store = S3Store(needs_stack)
+    store = FileStore(needs_stack.store_root, needs_stack.store_name)
     scratch_keys.append("tests/unicode.json")
     payload = {"title": "Résultats du troisième trimestre", "n": 3, "nested": {"a": [1, 2]}}
     uri = store.put_json(payload, "tests/unicode.json")
@@ -36,7 +36,7 @@ def test_json_round_trips_without_mangling_unicode(needs_stack, scratch_keys):
 
 
 def test_listing_is_by_prefix(needs_stack, scratch_keys):
-    store = S3Store(needs_stack)
+    store = FileStore(needs_stack.store_root, needs_stack.store_name)
     scratch_keys += ["tests/listing/one.json", "tests/listing/two.json"]
     store.put_json({"a": 1}, "tests/listing/one.json")
     store.put_json({"a": 2}, "tests/listing/two.json")
@@ -45,26 +45,21 @@ def test_listing_is_by_prefix(needs_stack, scratch_keys):
     assert all(Ref.parse(u).key.startswith("tests/listing/") for u in listed)
 
 
-def test_a_presigned_link_works_and_the_bare_url_does_not(needs_stack, scratch_keys):
-    """The deck never leaves the bucket; a link is how a person gets at it."""
-    store = S3Store(needs_stack)
-    scratch_keys.append("tests/presign.json")
-    uri = store.put_json({"hello": "deck"}, "tests/presign.json")
-    signed = store.url(uri, seconds=120)
-    assert urllib.request.urlopen(signed, timeout=20).read() == b'{\n "hello": "deck"\n}'
-
-    bare = signed.split("?")[0]
-    with pytest.raises(Exception):
-        urllib.request.urlopen(bare, timeout=20)
+def test_a_link_opens_the_stored_file(needs_stack, scratch_keys):
+    """Where a person gets at a deck: a file:// link to it on this machine."""
+    store = FileStore(needs_stack.store_root, needs_stack.store_name)
+    scratch_keys.append("tests/link.json")
+    uri = store.put_json({"hello": "deck"}, "tests/link.json")
+    assert urllib.request.urlopen(store.url(uri), timeout=20).read() == b'{\n "hello": "deck"\n}'
 
 
 def test_a_missing_object_is_a_clear_failure(needs_stack):
     from deck_agent.errors import Boundary
 
-    store = S3Store(needs_stack)
-    assert not store.exists(f"s3://{store.bucket}/tests/definitely-not-here.json")
+    store = FileStore(needs_stack.store_root, needs_stack.store_name)
+    assert not store.exists(f"local://{store.bucket}/tests/definitely-not-here.json")
     with pytest.raises((Boundary, Exception)):
-        store.get_bytes(f"s3://{store.bucket}/tests/definitely-not-here.json")
+        store.get_bytes(f"local://{store.bucket}/tests/definitely-not-here.json")
 
 
 FACTS = {"facts": [{"id": "F1", "text": "The pilot answered 38% of tickets without a person."},
@@ -82,7 +77,7 @@ def test_a_conversation_survives_a_new_graph_and_a_new_pool(needs_stack, templat
 
     deck_id = scratch_deck("persist")
     planner = StubAgentPlanner()
-    store = S3Store(needs_stack)
+    store = FileStore(needs_stack.store_root, needs_stack.store_name)
     template_uri = store.put(template, f"uploads/{sha256_file(template)}-template.pptx")
     scratch_keys.append(Ref.parse(template_uri).key)
 
@@ -114,7 +109,7 @@ def test_an_interrupt_can_be_resumed_by_a_later_call(needs_stack, template, scra
 
     deck_id = scratch_deck("interrupt")
     planner = StubAgentPlanner()
-    store = S3Store(needs_stack)
+    store = FileStore(needs_stack.store_root, needs_stack.store_name)
     template_uri = store.put(template, f"uploads/{sha256_file(template)}-template.pptx")
     scratch_keys.append(Ref.parse(template_uri).key)
     facade.create_deck(deck_id, "a deck", FACTS, template_uri,

@@ -52,17 +52,18 @@ samples:  ## build the engine's sample deck and example template, for the demo a
 # ---------------------------------------------------------------- the stack
 
 .PHONY: up
-up:  ## start postgres and the S3 service
-	$(COMPOSE) up -d postgres s3
+up:  ## start postgres
+	$(COMPOSE) up -d postgres
 	@$(COMPOSE) ps
 
 .PHONY: down
-down:  ## stop them (the data stays in the volumes)
+down:  ## stop it (the data stays in its volume)
 	$(COMPOSE) down
 
 .PHONY: destroy-data
-destroy-data:  ## stop them and delete the volumes: every deck and every checkpoint goes too
+destroy-data:  ## stop Postgres, delete its volume and the store: every deck and checkpoint goes
 	$(COMPOSE) down --volumes
+	rm -rf local/store
 
 .PHONY: logs
 logs:  ## follow the services' logs
@@ -76,10 +77,10 @@ logs:  ## follow the services' logs
 # What to KEEP, not what to delete. Listing the things to remove cannot work: run output and
 # one-off directories appear under local/ all the time, and the first version of this target
 # already missed one. Anything not named here is output and goes.
-KEEP_IN_LOCAL := fonts samples templates workspaces content.json handoff_content.json
+KEEP_IN_LOCAL := fonts samples templates workspaces content.json handoff_content.json store
 
 .PHONY: clean-scratch
-clean-scratch:  ## delete run output from local/, keeping fonts, samples and templates
+clean-scratch:  ## delete run output from local/, keeping the store, fonts, samples and templates
 	@before=$$(du -sk local 2>/dev/null | cut -f1); \
 	for entry in local/*; do \
 		name=$$(basename "$$entry"); \

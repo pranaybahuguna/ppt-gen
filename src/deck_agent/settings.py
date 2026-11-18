@@ -5,7 +5,7 @@ Two kinds of setting, deliberately kept apart (deckops hard rule 6):
 * **Model settings** - base URL, model name, API key - come *only* from a git-ignored JSON
   file (`llm.json`), never from the environment and never from code. Nothing about a model
   endpoint is ever committed.
-* **Infrastructure settings** - Postgres DSN, S3 endpoint, image name, limits - come from
+* **Infrastructure settings** - Postgres DSN, the store's folder, image name, limits - come from
   `config/agent.json` if it exists, and may be overridden by environment variables
   (`DECKOPS_<FIELD>`) so that `docker compose` can wire the containers together.
 
@@ -42,17 +42,15 @@ def _env(name: str, default):
 
 @dataclass
 class Settings:
-    # ---- object storage: every artefact of record lives here, not on a local disk ----
+    # ---- storage: every artefact of record lives in store_root, never in scratch ----
     """Every setting, with its default. Loaded once by settings(): defaults, then
     config/agent.json, then DECKOPS_<FIELD> environment variables. Model credentials are not
     here - they come only from llm.json (Settings.llm_config).
     """
-    s3_endpoint: str = "http://localhost:9000"
-    s3_region: str = "us-east-1"
-    s3_bucket: str = "deckops"
-    s3_access_key: str = "deckops"
-    s3_secret_key: str = "deckops-dev-secret"
-    store_backend: str = "s3"              # s3 | memory (tests, and one-shot runs with no containers)
+    store_backend: str = "local"           # local (files under store_root) | memory (tests)
+    store_root: str = "local/store"        # where decks, templates and run artefacts live
+    store_name: str = "deckops"            # the folder under store_root, and the "deckops" in
+                                           # local://deckops/<key>
 
     # ---- checkpointer: the conversation's state, one thread per deck session ----
     pg_dsn: str = "postgresql://deckops:deckops-dev-secret@localhost:55432/deckops"
@@ -106,13 +104,12 @@ class Settings:
                                                 # what the session still needs. See infra/cleanup.py
 
     def redacted(self) -> dict:
-        """These settings with secrets masked (the S3 secret, the Postgres password) - safe to
+        """These settings with secrets masked (the Postgres password) - safe to
         print.
 
         Called by: cmd_doctor, deliver (into the manifest), checkpointer error messages.
         """
         out = asdict(self)
-        out["s3_secret_key"] = "***"
         if "@" in self.pg_dsn:
             out["pg_dsn"] = "postgresql://***@" + self.pg_dsn.split("@", 1)[1]
         return out

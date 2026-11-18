@@ -24,7 +24,7 @@ from .storage import Store, store
 
 @dataclass
 class Workspace:
-    """A run's local scratch directory and its folder in the bucket, together.
+    """A run's local scratch directory and its folder in the store, together.
 
     Files are worked on locally and published to `<thread>/<run>/` (or `<thread>/` for deck
     versions); the scratch directory is deleted when the node finishes.
@@ -58,7 +58,7 @@ class Workspace:
 
     # -- object storage ----------------------------------------------------------------
     def key(self, name: str, *, versioned: bool = False) -> str:
-        """Where a name lives in the bucket. Run artefacts are namespaced by run; deck
+        """Where a name lives in the store. Run artefacts are namespaced by run; deck
         versions belong to the thread, because they outlive the run that made them."""
         return f"{self.thread_id}/{name}" if versioned else f"{self.thread_id}/{self.run_id}/{name}"
 

@@ -9,7 +9,7 @@ Three things are published here, and the third is the one that is easy to skip:
   it is not is worse than one handed over with two lines of "watch slide 4", because the first
   costs someone their credibility in a meeting.
 
-The manifest is written to the bucket next to the deck, so a run can be explained later from
+The manifest is written to the store next to the deck, so a run can be explained later from
 the artefacts alone: which engine commit, which template, which route, which path through the
 graph, what the model was asked and answered.
 """

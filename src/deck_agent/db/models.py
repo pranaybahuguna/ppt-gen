@@ -3,7 +3,7 @@
     decks (1) ────────< jobs (many)
        deck_id  ◀──────  deck_id
 
-`deck_id` is also the deck's folder in the bucket and its LangGraph thread id, so the three
+`deck_id` is also the deck's folder in the store and its LangGraph thread id, so the three
 stores line up by name. JSON columns are JSONB on Postgres and plain JSON elsewhere (SQLite in
 the unit tests).
 """

@@ -54,7 +54,7 @@ from starlette.responses import Response
 
 from . import facade
 from .db import repo
-from .infra.storage import Ref, sha256_file, store
+from .infra.storage import Ref, is_ref, sha256_file, store
 from .settings import settings
 from .summary import base_url, describe
 
@@ -207,7 +207,7 @@ def new_deck_id(title: str) -> str:
 
 
 def check_deck_id(deck_id: str) -> str:
-    """A deck id is a folder in the bucket and a conversation id: letters, digits, . _ -"""
+    """A deck id is a folder in the store and a conversation id: letters, digits, . _ -"""
     if not deck_id or not DECK_ID.match(deck_id):
         raise ValueError("deck_id must be 1-64 letters, digits, '.', '_' or '-', starting with "
                          "a letter or digit")
@@ -215,7 +215,7 @@ def check_deck_id(deck_id: str) -> str:
 
 
 def upload(name: str, data: bytes) -> str:
-    """Put a file a caller sent into the bucket's uploads/, named by content. -> its URI."""
+    """Put a file a caller sent into the store's uploads/, named by content. -> its URI."""
     import hashlib
 
     safe = re.sub(r"[^A-Za-z0-9._-]+", "-", Path(name).name) or "file"
@@ -223,8 +223,8 @@ def upload(name: str, data: bytes) -> str:
 
 
 def upload_path(path: str) -> str:
-    """A file on this machine, into uploads/. -> its URI. (s3:// URIs pass through.)"""
-    if path.startswith("s3://"):
+    """A file on this machine, into uploads/. -> its URI. (Stored references pass through.)"""
+    if is_ref(path):
         return path
     p = Path(path).expanduser()
     if not p.exists():
@@ -277,7 +277,7 @@ async def op_delete(deck_id: str) -> dict:
     check_deck_id(deck_id)
 
     def files_and_conversation():
-        """The bucket and the checkpointer are synchronous."""
+        """The store and the checkpointer are synchronous."""
         with checkpointer() as saver:
             plan = cleanup.plan_purge(store(), saver, [deck_id])
             return {**plan.summary(), **cleanup.execute(store(), saver, plan)}
@@ -486,17 +486,17 @@ def _route(path: str, methods: list[str]):
 
 @_route("/health", ["GET"])
 async def rest_health(request: Request) -> Response:
-    """Whether the bucket, the checkpointer and the database answer."""
+    """Whether the store, the checkpointer and the database answer."""
     from .infra.checkpointer import checkpointer
 
     def probe():
-        """Touch the bucket and the checkpointer; raise if either is unreachable."""
+        """Touch the store and the checkpointer; raise if either is unreachable."""
         store().ensure_bucket()
         with checkpointer():
             pass
     await asyncio.to_thread(probe)
     await repo.list_jobs(limit=1)                       # the database, and its tables
-    return _json({"ok": True, "bucket": store().bucket,
+    return _json({"ok": True, "store": str(getattr(store(), "root", store().bucket)),
                   "default_template": settings().default_template,
                   "jobs_running": await jobs().running()})
 

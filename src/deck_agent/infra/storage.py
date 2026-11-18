@@ -1,58 +1,52 @@
-"""Object storage: where decks and artefacts actually live.
+"""Storage: where decks and artefacts of record live - a folder on this machine.
 
-Why not just a folder? Because the graph is checkpointed. A conversation can be resumed in
-another process, on another machine, a week later - so the state may only hold *references*
-that any process can resolve. A local path in the state is a lie waiting to happen. Every
-artefact of record therefore has an `s3://bucket/key` URI, and local directories are scratch
-that can be deleted at any moment without losing anything.
+Why references and not paths? Because the graph is checkpointed. A conversation can be resumed
+in another process, a week later - so the state holds *references* (`local://deckops/<key>`)
+that any process on this machine resolves to the same file, never a scratch path. Scratch
+directories (local/workspaces) can be deleted at any moment without losing anything; the store
+(`local/store/`, `store_root`) cannot.
 
-What goes in here:
+What goes in here (under local/store/deckops/):
 
     <thread>/v001.pptx            every version of the deck (never overwritten: that is undo)
-    <thread>/<run>/outline.json   intermediate artefacts, so a run can be replayed or debugged
-    <thread>/<run>/plan.json
-    <thread>/<run>/ops.json
+    <thread>/<run>/storyline.json intermediate artefacts, so a run can be replayed or debugged
+    <thread>/<run>/manifest.json
     <thread>/<run>/previews/slide-01.png
-    kits/<hash>.json              (legacy) style kits from before the designed path; unused
-    uploads/<hash>-<name>.pptx    templates and decks handed in
+    uploads/<hash>-<name>.pptx    templates and decks handed in (and a template's .guide.json)
 
 Deleting any of it goes through `infra/cleanup.py`, which removes a deck's files and its
 checkpointed conversation together.
 
-In development this is MinIO in a container; in production it is whatever S3 the host app
-already has, with the same two settings changed. `MemoryStore` is the same interface with a
-dict behind it, for tests that should not need a container.
+References made when this was an S3 bucket (`s3://deckops/<key>`) still resolve: they name the
+same key, and the files were copied across. `MemoryStore` is the same interface with a dict
+behind it, for tests.
 """
 from __future__ import annotations
 
 import hashlib
-import io
+import os
+import shutil
 import threading
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlparse
 
 from ..errors import Boundary
-from ..settings import Settings, settings
+from ..settings import REPO, Settings, settings
 
-CONTENT_TYPES = {
-    ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-    ".json": "application/json", ".png": "image/png", ".pdf": "application/pdf",
-    ".py": "text/x-python", ".txt": "text/plain",
-}
+#: The scheme of every reference this store makes; "s3" is read too (references from before).
+SCHEME = "local"
+_SCHEMES = ("local", "s3")
 
 
-def content_type(name: str) -> str:
-    """The MIME type stored with an object, from its file extension.
-
-    Called by: S3Store.put and put_bytes.
-    """
-    return CONTENT_TYPES.get(Path(name).suffix.lower(), "application/octet-stream")
+def is_ref(value) -> bool:
+    """Whether a string is a stored-object reference (local://... or a legacy s3://...)."""
+    return isinstance(value, str) and value.startswith(tuple(f"{s}://" for s in _SCHEMES))
 
 
 def sha256_file(path: str | Path, length: int = 16) -> str:
     """The first `length` hex digits of a file's SHA-256: the content hash used to key templates
-    and kits, and to name uploads.
+    and to name uploads.
 
     Called by: the CLI's uploads, templates.ingest, nodes.common.template_fingerprint, tests.
     """
@@ -65,15 +59,15 @@ def sha256_file(path: str | Path, length: int = 16) -> str:
 
 @dataclass(frozen=True)
 class Ref:
-    """A parsed `s3://bucket/key`."""
+    """A parsed `local://<store>/<key>` (or a legacy `s3://<store>/<key>`)."""
 
     bucket: str
     key: str
 
     @property
     def uri(self) -> str:
-        """This reference as `s3://bucket/key`."""
-        return f"s3://{self.bucket}/{self.key}"
+        """This reference as `local://<store>/<key>`."""
+        return f"{SCHEME}://{self.bucket}/{self.key}"
 
     @property
     def name(self) -> str:
@@ -82,14 +76,22 @@ class Ref:
 
     @classmethod
     def parse(cls, uri: str) -> "Ref":
-        """Parse `s3://bucket/key`; raise Boundary for anything else.
+        """Parse a reference; raise Boundary for anything else.
 
         Called by: every Store method that takes a URI, cleanup, gather.
         """
         u = urlparse(uri)
-        if u.scheme != "s3" or not u.netloc or not u.path.lstrip("/"):
-            raise Boundary(f"not an object reference: {uri!r} (expected s3://bucket/key)")
-        return cls(u.netloc, u.path.lstrip("/"))
+        key = u.path.lstrip("/")
+        if u.scheme not in _SCHEMES or not u.netloc or not key:
+            raise Boundary(f"not an object reference: {uri!r} (expected {SCHEME}://<store>/<key>)")
+        if any(part in ("..", "") for part in key.split("/")):
+            raise Boundary(f"not an object reference: {uri!r} (a key may not climb out of the store)")
+        return cls(u.netloc, key)
+
+
+def canonical(uri: str) -> str:
+    """The one spelling of a reference (a legacy s3:// one becomes local://), for comparisons."""
+    return Ref.parse(uri).uri
 
 
 @dataclass(frozen=True)
@@ -102,25 +104,24 @@ class Obj:
 
     @property
     def key(self) -> str:
-        """The object's key within the bucket."""
+        """The object's key within the store."""
         return Ref.parse(self.uri).key
 
 
 class Store:
-    """The interface the graph uses. Two implementations: S3Store and MemoryStore."""
+    """The interface the graph uses. Two implementations: FileStore and MemoryStore."""
 
     bucket: str
 
     def ensure_bucket(self) -> None:
-        """Create the bucket if it does not exist; raise Boundary with the fix if storage is
-        unreachable.
+        """Create the store's folder if it does not exist.
 
         Called by: store() on first use, cmd_init, cmd_doctor.
         """
         ...
 
     def put(self, local: str | Path, key: str) -> str:
-        """Upload a local file to `key`. -> its s3:// URI.
+        """Upload a local file to `key`. -> its local:// URI.
 
         Called by: Workspace.publish / publish_dir (run artefacts, deck versions), the CLI's
         uploads
@@ -129,7 +130,7 @@ class Store:
         ...
 
     def put_bytes(self, data: bytes, key: str) -> str:
-        """Store bytes at `key`. -> its s3:// URI.
+        """Store bytes at `key`. -> its local:// URI.
 
         Called by: put_json, the server's uploads, tests.
         """
@@ -172,14 +173,14 @@ class Store:
         ...
 
     def delete(self, uris: list[str]) -> int:
-        """Delete objects by URI; S3 is asked in batches of a thousand. -> how many were deleted.
+        """Delete objects by URI. -> how many were deleted.
 
         Called by: cleanup.execute.
         """
         ...
 
     def url(self, uri: str, seconds: int = 3600) -> str:
-        """A presigned download link, valid for `seconds` - what a person can open in a browser.
+        """Where a person can open the object: a file:// link to it on this machine.
 
         Called by: deliver (the result's `url`).
         """
@@ -203,156 +204,120 @@ class Store:
         return json.loads(self.get_bytes(uri))
 
 
-class S3Store(Store):
-    """The Store on any S3-compatible service (SeaweedFS locally), through boto3.
+class FileStore(Store):
+    """Objects as files: `<root>/<store>/<key>`. Writes go to a temporary file first and are then
+    renamed into place, so a reader never sees half a deck.
 
-    Built by: store(), when store_backend is 's3'.
+    Built by: store(), when store_backend is 'local' (the default).
     """
-    def __init__(self, s: Settings | None = None):
-        """A boto3 client for the configured endpoint and credentials, path-style addressing.
 
-        Called by: store(), when store_backend is s3.
-        """
-        import boto3
-        from botocore.config import Config
+    def __init__(self, root: str | Path, bucket: str = "deckops"):
+        """A store rooted at `root` (relative paths are under the repository)."""
+        root = Path(root)
+        self.root = (root if root.is_absolute() else REPO / root).resolve()
+        self.bucket = bucket
 
-        self.s = s or settings()
-        self.bucket = self.s.s3_bucket
-        self._client = boto3.client(
-            "s3",
-            endpoint_url=self.s.s3_endpoint or None,
-            region_name=self.s.s3_region,
-            aws_access_key_id=self.s.s3_access_key,
-            aws_secret_access_key=self.s.s3_secret_key,
-            # MinIO serves path-style addressing; real S3 accepts it too.
-            config=Config(s3={"addressing_style": "path"}, retries={"max_attempts": 3},
-                          connect_timeout=5, read_timeout=60),
-        )
+    def _path(self, uri_or_key: str, is_key: bool = False) -> Path:
+        ref = Ref(self.bucket, uri_or_key) if is_key else Ref.parse(uri_or_key)
+        if is_key and any(part in ("..", "") for part in uri_or_key.split("/")):
+            raise Boundary(f"not a key: {uri_or_key!r}")
+        p = (self.root / ref.bucket / ref.key).resolve()
+        if self.root not in p.parents:
+            raise Boundary(f"not an object reference: {uri_or_key!r}")
+        return p
 
     def ensure_bucket(self) -> None:
-        """Create the bucket if it does not exist; raise Boundary with the fix if storage is
-        unreachable.
+        """Create the store's folder if it does not exist."""
+        (self.root / self.bucket).mkdir(parents=True, exist_ok=True)
 
-        The S3 implementation; see Store.
-        """
-        from botocore.exceptions import ClientError, EndpointConnectionError
-
+    def _write(self, path: Path, writer) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
         try:
-            self._client.head_bucket(Bucket=self.bucket)
-        except EndpointConnectionError:
-            raise Boundary(f"object storage is not reachable at {self.s.s3_endpoint}. "
-                           "Run: make up") from None
-        except ClientError as e:
-            if e.response["Error"]["Code"] in ("404", "NoSuchBucket", "403"):
-                try:
-                    self._client.create_bucket(Bucket=self.bucket)
-                except ClientError as e2:
-                    raise Boundary(f"could not create bucket {self.bucket}: {e2}") from None
-            else:
-                raise Boundary(f"object storage rejected us: {e}") from None
+            writer(tmp)
+            os.replace(tmp, path)
+        finally:
+            if tmp.exists():
+                tmp.unlink()
 
     def put(self, local: str | Path, key: str) -> str:
-        """Upload a local file to `key`. -> its s3:// URI.
-
-        The S3 implementation; see Store.
-        """
-        self._client.upload_file(str(local), self.bucket, key,
-                                 ExtraArgs={"ContentType": content_type(key)})
+        """Copy a local file to `key`. -> its local:// URI."""
+        self._write(self._path(key, True), lambda tmp: shutil.copyfile(local, tmp))
         return Ref(self.bucket, key).uri
 
     def put_bytes(self, data: bytes, key: str) -> str:
-        """Store bytes at `key`. -> its s3:// URI.
-
-        The S3 implementation; see Store.
-        """
-        self._client.upload_fileobj(io.BytesIO(data), self.bucket, key,
-                                    ExtraArgs={"ContentType": content_type(key)})
+        """Store bytes at `key`. -> its local:// URI."""
+        self._write(self._path(key, True), lambda tmp: tmp.write_bytes(bytes(data)))
         return Ref(self.bucket, key).uri
 
     def get(self, uri: str, local: str | Path) -> Path:
-        """Download an object to a local path (parent directories created). -> the path.
-
-        The S3 implementation; see Store.
-        """
-        r = Ref.parse(uri)
+        """Copy an object to a local path (parent directories created). -> the path."""
+        src = self._path(uri)
+        if not src.is_file():
+            raise Boundary(f"no such object: {uri}")
         local = Path(local)
         local.parent.mkdir(parents=True, exist_ok=True)
-        self._client.download_file(r.bucket, r.key, str(local))
+        shutil.copyfile(src, local)
         return local
 
     def get_bytes(self, uri: str) -> bytes:
-        """An object's bytes. Raises when it does not exist.
-
-        The S3 implementation; see Store.
-        """
-        r = Ref.parse(uri)
-        return self._client.get_object(Bucket=r.bucket, Key=r.key)["Body"].read()
+        """An object's bytes. Raises when it does not exist."""
+        src = self._path(uri)
+        if not src.is_file():
+            raise Boundary(f"no such object: {uri}")
+        return src.read_bytes()
 
     def exists(self, uri: str) -> bool:
-        """Whether an object exists.
-
-        The S3 implementation; see Store.
-        """
-        from botocore.exceptions import ClientError
-
-        r = Ref.parse(uri)
+        """Whether an object exists."""
         try:
-            self._client.head_object(Bucket=r.bucket, Key=r.key)
-            return True
-        except ClientError:
+            return self._path(uri).is_file()
+        except Boundary:
             return False
 
-    def list(self, prefix: str) -> list[str]:
-        """Every object URI under a prefix, in key order.
+    def objects(self, prefix: str) -> list[Obj]:
+        """Every object under a key prefix, with size and last-modified time."""
+        base = self.root / self.bucket
+        if not base.exists():
+            return []
+        out = []
+        for p in base.rglob("*"):
+            if not p.is_file() or p.name.startswith(".") and p.name.endswith(".tmp"):
+                continue
+            key = p.relative_to(base).as_posix()
+            if key.startswith(prefix):
+                st = p.stat()
+                out.append(Obj(Ref(self.bucket, key).uri, st.st_size, st.st_mtime))
+        return sorted(out, key=lambda o: o.uri)
 
-        The S3 implementation; see Store.
-        """
+    def list(self, prefix: str) -> list[str]:
+        """Every object URI under a key prefix, in key order."""
         return [o.uri for o in self.objects(prefix)]
 
-    def objects(self, prefix: str) -> list[Obj]:
-        """Every object under a prefix, with size and last-modified time (Obj).
-
-        The S3 implementation; see Store.
-        """
-        out, token = [], None
-        while True:
-            kw = {"Bucket": self.bucket, "Prefix": prefix}
-            if token:
-                kw["ContinuationToken"] = token
-            page = self._client.list_objects_v2(**kw)
-            out += [Obj(Ref(self.bucket, o["Key"]).uri, o["Size"], o["LastModified"].timestamp())
-                    for o in page.get("Contents", [])]
-            if not page.get("IsTruncated"):
-                return out
-            token = page["NextContinuationToken"]
-
     def delete(self, uris: list[str]) -> int:
-        """Delete objects by URI; S3 is asked in batches of a thousand. -> how many were deleted.
-
-        The S3 implementation; see Store.
-        """
-        keys = [Ref.parse(u).key for u in uris]
+        """Delete objects by URI, and the folders they leave empty. -> how many were deleted."""
         gone = 0
-        for i in range(0, len(keys), 1000):
-            batch = [{"Key": k} for k in keys[i:i + 1000]]
-            resp = self._client.delete_objects(Bucket=self.bucket,
-                                               Delete={"Objects": batch, "Quiet": True})
-            errors = resp.get("Errors") or []
-            if errors:
-                raise Boundary(f"object storage refused to delete {len(errors)} object(s), "
-                               f"e.g. {errors[0].get('Key')}: {errors[0].get('Message')}")
-            gone += len(batch)
+        base = self.root / self.bucket
+        for u in uris:
+            try:
+                p = self._path(u)
+            except Boundary:
+                continue
+            if p.is_file():
+                p.unlink()
+                gone += 1
+                d = p.parent
+                while d != base and base in d.parents and not any(d.iterdir()):
+                    d.rmdir()
+                    d = d.parent
         return gone
 
     def url(self, uri: str, seconds: int = 3600) -> str:
-        """A link the caller can hand to a browser. The deck itself never leaves the bucket."""
-        r = Ref.parse(uri)
-        return self._client.generate_presigned_url(
-            "get_object", Params={"Bucket": r.bucket, "Key": r.key}, ExpiresIn=seconds)
+        """A file:// link to the object on this machine."""
+        return self._path(uri).as_uri()
 
 
 class MemoryStore(Store):
-    """The same interface over a dict. For tests, and for a one-shot CLI run with no containers."""
+    """The same interface over a dict. For tests, and for a one-shot run that should leave nothing."""
 
     def __init__(self, bucket: str = "memory"):
         """An empty store held in a dict.
@@ -365,22 +330,21 @@ class MemoryStore(Store):
         self._lock = threading.Lock()
 
     def ensure_bucket(self) -> None:
-        """Create the bucket if it does not exist; raise Boundary with the fix if storage is
-        unreachable.
+        """Create the store's folder if it does not exist (nothing to do in memory).
 
         The in-memory implementation, for tests and one-shot runs; see Store.
         """
         return None
 
     def put(self, local: str | Path, key: str) -> str:
-        """Upload a local file to `key`. -> its s3:// URI.
+        """Upload a local file to `key`. -> its local:// URI.
 
         The in-memory implementation, for tests and one-shot runs; see Store.
         """
         return self.put_bytes(Path(local).read_bytes(), key)
 
     def put_bytes(self, data: bytes, key: str) -> str:
-        """Store bytes at `key`. -> its s3:// URI.
+        """Store bytes at `key`. -> its local:// URI.
 
         The in-memory implementation, for tests and one-shot runs; see Store.
         """
@@ -437,7 +401,7 @@ class MemoryStore(Store):
                           key=lambda o: o.uri)
 
     def delete(self, uris: list[str]) -> int:
-        """Delete objects by URI; S3 is asked in batches of a thousand. -> how many were deleted.
+        """Delete objects by URI. -> how many were deleted.
 
         The in-memory implementation, for tests and one-shot runs; see Store.
         """
@@ -451,7 +415,7 @@ class MemoryStore(Store):
         return gone
 
     def url(self, uri: str, seconds: int = 3600) -> str:
-        """A presigned download link, valid for `seconds` - what a person can open in a browser.
+        """Where a person can open the object (in memory: just its URI).
 
         The in-memory implementation, for tests and one-shot runs; see Store.
         """
@@ -462,7 +426,7 @@ _store: Store | None = None
 
 
 def store(s: Settings | None = None) -> Store:
-    """The process-wide store. `store_backend=memory` avoids needing a container.
+    """The process-wide store: files under store_root, or (store_backend=memory) a dict.
 
     Called by: cli._upload_if_local, cli.cmd_clean, cli.cmd_doctor, cli.cmd_get, cli.cmd_init,
         cli.cmd_ls, templates.ingest, and most nodes; tests/demo.py.
@@ -470,7 +434,7 @@ def store(s: Settings | None = None) -> Store:
     global _store
     if _store is None:
         s = s or settings()
-        _store = MemoryStore(s.s3_bucket) if s.store_backend == "memory" else S3Store(s)
+        _store = MemoryStore(s.store_name) if s.store_backend == "memory" else FileStore(s.store_root, s.store_name)
         _store.ensure_bucket()
     return _store
 

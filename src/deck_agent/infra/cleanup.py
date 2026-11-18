@@ -2,7 +2,7 @@
 
 A deck lives in two places, and cleaning only one of them leaves the other broken:
 
-    the bucket      <deck_id>/v001.pptx, <deck_id>/<run>/...   the files
+    the store       <deck_id>/v001.pptx, <deck_id>/<run>/...   the files
     the checkpoint  thread <deck_id> in Postgres                the conversation
 
 Delete the files and keep the thread, and the next "make slide 2 shorter" finds a session
@@ -19,7 +19,7 @@ Three kinds of clean-up, from gentlest to bluntest:
   already dropped. This is what to run after a deck is finished, and what `tidy_after_turn`
   runs on its own.
 * **purge** - one deck gone completely: its files and its conversation.
-* **everything** - the whole bucket and every conversation. Templates and kits can be kept.
+* **everything** - the whole store and every conversation. Templates and kits can be kept.
 
 Every function here *plans* first and returns what it would delete, so the command line can
 show a dry run; nothing is deleted until `execute()` is called with that plan.
@@ -140,14 +140,16 @@ def referenced(values, bucket: str) -> set[str]:
 
     Called by: plan_tidy.
     """
+    from .storage import Ref, canonical, is_ref
+
     out: set[str] = set()
-    prefix = f"s3://{bucket}/"
 
     def walk(v):
-        """Collect every s3:// string in a nested value."""
+        """Collect every stored-object reference in a nested value, in its one spelling (a
+        legacy s3:// reference names the same file as its local:// listing)."""
         if isinstance(v, str):
-            if v.startswith(prefix):
-                out.add(v)
+            if is_ref(v) and Ref.parse(v).bucket == bucket:
+                out.add(canonical(v))
         elif isinstance(v, dict):
             for x in v.values():
                 walk(x)
@@ -160,7 +162,7 @@ def referenced(values, bucket: str) -> set[str]:
 
 
 def inventory(store: Store, saver) -> dict:
-    """What is in the bucket and the checkpointer, per deck.
+    """What is in the store and the checkpointer, per deck.
 
     Called by: cli.cmd_clean.
     """

@@ -3,12 +3,12 @@
 deckops is meant to live under a chat agent that already owns the conversation. That agent
 turns "now make slide 2 shorter" into `edit_deck(deck_id, "make slide 2 shorter")`, and these
 functions are the whole surface it needs. `deck_id` is the conversation: it is the LangGraph
-thread (so the state is already there) and the prefix in the bucket (so the files are too).
+thread (so the state is already there) and the folder in the store (so the files are too).
 
 Everything returns the same shape - a `delivered` dict, or a question - so a host agent needs
 one branch, not five:
 
-    {"ok": true,  "deck": "s3://...", "url": "...", "previews": [...],
+    {"ok": true,  "deck": "local://...", "url": "...", "previews": [...],
      "warnings": [...], "changelog": [...], "route": "edit", "versions": 3}
     {"ok": false, "question": "Which language should I translate it into?"}
     {"ok": false, "reason": "...", "errors": [...]}
@@ -36,7 +36,7 @@ def _config(deck_id: str) -> dict:
 
 def _run_id() -> str:
     """A new run id, `YYYYmmdd-HHMMSS-xxxxxx`: one per turn, and the run folder's name in the
-    bucket.
+    store.
 
     Called by: _invoke, when the caller does not supply one.
     """
@@ -284,7 +284,7 @@ def undo(deck_id: str, planner=None, s: Settings | None = None) -> dict:
     """Go back one request: each version is the deck after one request (_keep_recent_versions).
 
     Versions are appended and never overwritten, so undo is dropping the last entry, and the
-    file it pointed at is still in the bucket if anyone wants it back.
+    file it pointed at is still in the store if anyone wants it back.
 
     Called by: cli.cmd_undo; tests/demo.py.
     """

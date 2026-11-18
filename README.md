@@ -26,7 +26,7 @@ after) with what was asked, and sending weak ones round again (up to three times
 **deck check** across all slides: chart number formats, chart colours and title sizes fixed by
 code, units and numbers checked against the facts by a model. Checks are advice, not gates:
 problems go back to the model, the best attempt is kept, and what is left is reported as a
-warning. Every turn is checkpointed in Postgres; every file lives in S3.
+warning. Every turn is checkpointed in Postgres; every file lives in the store, a folder (`local/store`).
 
 [Step by step](#step-by-step-what-happens-what-goes-in-what-comes-out) follows one request
 through every node, with what goes in and comes out; [Pieces or code](#pieces-or-code-who-draws-a-slide)
@@ -38,7 +38,7 @@ says when a slide is drawn from building blocks and when the model writes code f
 |---|---|---|
 | **agent** | one Python process: the LangGraph graph, the slide renderer (`src/deck_agent/design`) and the engine (`engine/deckops`, used for translation) | everything deterministic is pure Python |
 | **Postgres** | the checkpointer, and the `decks` and `jobs` tables | the conversation's state after every node; a queryable record of every deck and every request |
-| **S3** (SeaweedFS locally) | every deck version, template, preview and manifest | the state holds only `s3://` references, so any process can resume |
+| **the store** (`local/store/`) | every deck version, template, preview and manifest, as files | the state holds only `local://deckops/<key>` references, never scratch paths, so any process can resume |
 | **sandbox image** | LibreOffice, poppler, fonts; started with no network, read-only, no capabilities | rendering slides, and running model-written code |
 
 ## Diagrams
@@ -54,32 +54,32 @@ sequenceDiagram
     participant W as Worker thread
     participant G as LangGraph graph
     participant CP as Postgres: checkpoints
-    participant S3 as S3 bucket
+    participant ST as Store (local/store)
     participant M as Model endpoint
     participant SB as Sandbox containers
 
     U->>API: POST /decks (brief, context.md)
-    API->>S3: put uploads/<hash>-context.md
+    API->>ST: put uploads/<hash>-context.md
     API->>DB: insert decks row (building) and jobs row (queued)
     API-->>U: 202 {job_id, deck_id}
     API->>DB: jobs.status = running
     API->>W: facade.create_deck (asyncio.to_thread)
     W->>G: invoke, thread_id = deck_id
     loop every node (writers and workers in parallel)
-        G->>S3: read inputs, write the run's artefacts
+        G->>ST: read inputs, write the run's artefacts
         G->>M: model calls (facts, storyline, one per slide, review)
         G->>SB: render previews, run model-written code (one container each)
         G->>CP: save the state (a checkpoint)
     end
-    G-->>W: result (deck = s3://.../v001.pptx, changelog)
-    W->>S3: delete versions older than keep_versions
+    G-->>W: result (deck = local://.../v001.pptx, changelog)
+    W->>ST: delete versions older than keep_versions
     W->>CP: update deck_versions
     W-->>API: result + summary
     API->>DB: jobs: done, summary, log. decks: current_file, ready
     U->>API: GET /jobs/<job_id>
     API-->>U: status, summary, download_url
     U->>API: GET /decks/<deck_id>/download
-    API->>S3: get the latest version
+    API->>ST: get the latest version
     API-->>U: the .pptx
 ```
 
@@ -127,10 +127,10 @@ times at once* (LangGraph `Send`): one `write` per content slide, one `work` per
 `build` and `join` wait for all of them. A new deck's weak slides are redone by the edit
 route's `work` and `join`, exactly like an edited slide.
 
-**What each node does.** `run/` is the turn's folder in S3, `<deck_id>/<run_id>/`. After every
+**What each node does.** `run/` is the turn's folder in the store, `<deck_id>/<run_id>/`. After every
 node LangGraph also saves the state in Postgres (a checkpoint) - not repeated in the table.
 
-| Node | What it does | Model | Writes to S3 |
+| Node | What it does | Model | Writes to the store |
 |---|---|---|---|
 | `intake` | starts the turn; checks and reads any attached deck | - | - |
 | `route` | decides: create, edit, translate, ask or decline | only when the rules are unsure | - |
@@ -155,7 +155,7 @@ node LangGraph also saves the state in Postgres (a checkpoint) - not repeated in
 **Around the graph** (the server, or the command line): before it runs, a `jobs` row
 (`queued`, then `running`) and, for a create, a `decks` row; after it, the job is marked `done`
 or `failed` with its summary, the deck row gets the latest file, and versions older than
-`keep_versions` are deleted from S3.
+`keep_versions` are deleted from the store.
 
 ### 3. The tables
 
@@ -167,7 +167,7 @@ erDiagram
     checkpoints ||--o{ checkpoint_writes : "thread_id, checkpoint_id"
 
     decks {
-        varchar deck_id PK "also the S3 folder"
+        varchar deck_id PK "also the store folder"
         text title
         text template
         text current_file
@@ -218,19 +218,19 @@ erDiagram
 This section follows one request through the graph, node by node. For each step it says what
 the step is given, what it decides, what it hands on, and where its output is kept. The state
 (the `DeckState` fields named in `code` below) is saved in Postgres after every node, and every
-file goes to S3; `run/` means `<deck_id>/<run_id>/`.
+file goes to the store (`local/store/deckops/`); `run/` means `<deck_id>/<run_id>/`.
 
 ### Every request starts the same way
 
 **0. The caller.** `POST /decks` (create) or `POST /decks/<id>/<action>` (`edit`,
-`translate`, `attach`, ...; [every endpoint](#every-rest-endpoint)), or the same as MCP tools. The server stores any uploaded file in S3 under
+`translate`, `attach`, ...; [every endpoint](#every-rest-endpoint)), or the same as MCP tools. The server stores any uploaded file in the store under
 `uploads/`, writes a `jobs` row (`queued`), answers `202 {job_id, deck_id}` at once, and runs the
 graph in a worker thread. The graph is started with:
 
 ```json
 {"instruction": "make slide 3 more visual and fix the typo on slide 6",
- "attachments": ["s3://deckops/uploads/<hash>-deck.pptx"],
- "context_docs": ["s3://deckops/uploads/<hash>-notes.md"],
+ "attachments": ["local://deckops/uploads/<hash>-deck.pptx"],
+ "context_docs": ["local://deckops/uploads/<hash>-notes.md"],
  "content_pack": null}
 ```
 
@@ -426,13 +426,13 @@ review looks at it again. The rest are warnings (`audit: slide N: ...`). Switch 
 the full trace, the settings that mattered) and returns:
 
 ```json
-{"ok": true, "deck": "s3://deckops/voltline/v017.pptx", "url": "<a signed download link>",
+{"ok": true, "deck": "local://deckops/voltline/v017.pptx", "url": "file:///.../local/store/deckops/voltline/v017.pptx",
  "route": "edit", "version": 17, "versions": 2, "errors": [],
  "changelog": [{"slide": 3, "change": "KPI cards and a bar chart instead of a text list",
                 "drawn_with": ["kpis", "chart"]},
                {"slide": null, "change": "deck check: slide 8: chart colours Electricity 7A5195->87B049"}],
  "warnings": ["slide 6: ...", "audit: slide 11: ..."],
- "previews": ["s3://.../previews/slide-03.png"], "manifest": "s3://.../manifest.json"}
+ "previews": ["local://.../previews/slide-03.png"], "manifest": "local://.../manifest.json"}
 ```
 
 **After the graph** (`facade`, then the server): the versions this request made in between are deleted, so a
@@ -497,12 +497,12 @@ flowchart TD
 
 | | | |
 |---|---|---|
-| **Docker** | Desktop 4.x or Engine 24+, running, 4 GB of memory or more | Postgres, S3 and the sandbox all run in it |
+| **Docker** | Desktop 4.x or Engine 24+, running, 4 GB of memory or more | Postgres and the sandbox run in it |
 | **Python 3.12** | as `python3.12` on the PATH | `brew install python@3.12`, or `apt install python3.12 python3.12-venv` |
 | **git**, **make** | any recent | |
 
-macOS or Linux (Windows under WSL2). Free ports, all bound to 127.0.0.1: **55432** (Postgres),
-**9000** (S3), **9333** (S3 status page) - change them in `docker/compose.yml` and
+macOS or Linux (Windows under WSL2). Free ports, all bound to 127.0.0.1: **55432** (Postgres)
+and **8765** (the server) - change them in `docker/compose.yml` and
 `config/agent.json` if taken. LibreOffice and fonts are **not** needed on the machine; they are
 in the sandbox image. Network is needed once, for Docker Hub, Debian packages and PyPI.
 
@@ -525,11 +525,11 @@ make setup
 ### 2. Start the services
 
 ```bash
-make up        # Postgres and S3 in Docker, with named volumes
-make init      # checkpoint tables and the bucket
-make doctor    # checks engine, fonts, sandbox, Postgres, S3, model - must end with READY
+make up        # Postgres in Docker, with a named volume
+make init      # checkpoint tables and the store's folder
+make doctor    # checks engine, fonts, sandbox, Postgres, the store, model - must end with READY
 make test      # unit tests, nothing running needed (their database is SQLite, through aiosqlite)
-make test-all  # + integration tests against Docker, Postgres (asyncpg) and S3
+make test-all  # + integration tests against Docker and Postgres (asyncpg)
 make lint      # unused imports and undefined names
 ```
 
@@ -557,7 +557,7 @@ runs a whole conversation with the offline planner.
 A few seconds. It checks the file, reads its **design profile** - the layout its slides are
 built on, where the title sits, the safe area for content, the real brand colours (counted from
 what the slides paint, not from the theme, which is often the Office default), and its fonts -
-stores it in `uploads/` in the bucket, and prints what it found. `--make-default` makes it the
+stores it in `uploads/` in the store, and prints what it found. `--make-default` makes it the
 template decks use; a create request can also name any template directly.
 
 **Templates that carry their own guidelines.** Many corporate templates include slides that are
@@ -591,7 +591,7 @@ teams; the bot answered 38% of tickets; median first response fell from 11 to 3 
 ```
 
 About two to three minutes for twelve slides (the slides are written in parallel). The result's
-`deck` is the file in the bucket and `url` a download link. Then, in the same conversation, any time later:
+`deck` is the file in the store and `url` a link to it on this machine. Then, in the same conversation, any time later:
 
 ```bash
 .venv/bin/deckops get <deck uri from the result> my-deck.pptx
@@ -631,9 +631,9 @@ the job object below - `202` while it runs, `200` when finished (or with `?wait=
 
 | Method and path | Body | Returns |
 |---|---|---|
-| `GET /health` | - | `{ok, bucket, default_template, jobs_running}` |
+| `GET /health` | - | `{ok, store, default_template, jobs_running}` |
 | `POST /templates` | file `file` (the .pptx); `make_default` (default `true`) | job; result: `{ok, template_id, template, default_template, slides, profile: {layout, blank_layout, font, body_pt, colours}}` |
-| `POST /decks` | `brief` (required); `title` (the brief if missing); `deck_id` - if missing, made from the title: its first five words, lower-case, joined by underscores, plus a 6-character unique part (`Support bot pilot - ops review` -> `support_bot_pilot_ops_review_7f3a9c`); context as files `context` (repeatable: .md .txt .csv .json .docx), text `context`, or `context_uris` (s3:// or server paths); `template` (s3:// URI) or file `template`; optional `content_pack` (JSON facts, to skip gathering) | job; result: the deck result below |
+| `POST /decks` | `brief` (required); `title` (the brief if missing); `deck_id` - if missing, made from the title: its first five words, lower-case, joined by underscores, plus a 6-character unique part (`Support bot pilot - ops review` -> `support_bot_pilot_ops_review_7f3a9c`); context as files `context` (repeatable: .md .txt .csv .json .docx), text `context`, or `context_uris` (local:// references or server paths); `template` (a local:// reference) or file `template`; optional `content_pack` (JSON facts, to skip gathering) | job; result: the deck result below |
 | `POST /decks/{deck_id}/edit` | `instruction` | job; deck result |
 | `POST /decks/{deck_id}/translate` | `lang`; optional `slides` (1-based list) | job; deck result |
 | `POST /decks/{deck_id}/ask` | `instruction` - the router decides what it is | job; deck result, or `{question}` |
@@ -694,7 +694,7 @@ A finished result looks like:
                "built 12 slides from the template's layouts (cover x1, columns x2, text x2, cards x1)",
                "designed slide 3 as a hub and spoke - A central circle ...",
                "warning: ..."],
-   "changelog": [...], "warnings": [...], "deck": "s3://deckops/pilot/v003.pptx"}}
+   "changelog": [...], "warnings": [...], "deck": "local://deckops/pilot/v003.pptx"}}
 ```
 
 Every job is a row in the `jobs` table (see [Data model](#data-model)), so it outlives the
@@ -731,10 +731,10 @@ about: which decks exist, and what was done to each.
 
 | Column | Type | What it holds |
 |---|---|---|
-| `deck_id` | varchar(64), **primary key** | the permanent name; also the S3 folder and the LangGraph `thread_id` |
+| `deck_id` | varchar(64), **primary key** | the permanent name; also the store folder and the LangGraph `thread_id` |
 | `title` | text | the human name; can be renamed |
-| `template` | text | the template it was built from (s3://) |
-| `current_file` | text | the latest `.pptx` (s3://) |
+| `template` | text | the template it was built from (local://) |
+| `current_file` | text | the latest `.pptx` (local://) |
 | `status` | varchar(16) | `building` / `ready` / `failed` |
 | `created_at`, `updated_at` | timestamptz | |
 
@@ -755,7 +755,7 @@ about: which decks exist, and what was done to each.
 One deck has many jobs; deleting a deck deletes its jobs.
 
 ```
-decks (1) ────────< jobs (many)            deck_id = S3 folder = LangGraph thread_id
+decks (1) ────────< jobs (many)            deck_id = store folder = LangGraph thread_id
 ```
 
 **When rows are written** (`src/deck_agent/db/repo.py`):
@@ -801,18 +801,18 @@ facade.session(deck_id)
 facade.undo(deck_id)
 ```
 
-`deck_id` is the conversation: the LangGraph thread and the folder in the bucket. Every call
+`deck_id` is the conversation: the LangGraph thread and the folder in the store. Every call
 returns one of three shapes:
 
 ```json
-{"ok": true,  "deck": "s3://...", "url": "...", "previews": [...], "warnings": [], "changelog": [...]}
+{"ok": true,  "deck": "local://...", "url": "...", "previews": [...], "warnings": [], "changelog": [...]}
 {"ok": false, "question": "Which language should I translate it into?"}
 {"ok": false, "reason": "...", "errors": [...]}
 ```
 
 ## How the sandbox runs
 
-Docker Compose runs only the two services that stay up: **Postgres** and **SeaweedFS** (`make up`).
+Docker Compose runs only the one service that stays up: **Postgres** (`make up`).
 The sandbox is not a service. `make image` builds `deckops/sandbox:0.1.0` once, and the agent starts
 a fresh container from it **per job**, with `docker run` from `src/deck_agent/sandbox/docker.py`:
 
@@ -900,7 +900,7 @@ slide as it was, and says so.
 | `db_url` | empty | the decks and jobs tables; empty means `pg_dsn` with the asyncpg driver |
 | `tidy_after_turn` | `false` | after each turn, drop the deck's older run artefacts |
 | `render_backend`, `code_runner` | `docker` | `off` to run without the sandbox |
-| `s3_endpoint`, `pg_dsn` | the local containers | point at any S3 and Postgres |
+| `store_root`, `pg_dsn` | `local/store`, the local container | where decks and artefacts live; point at any Postgres |
 | `llm_client` | `openai-compat` | `langchain`, or `stub` for no model |
 | `server_host`, `server_port` | `127.0.0.1`, `8765` | where `deckops serve` listens |
 | `server_url` | empty | the address put in download links, when callers reach the server by another name |
@@ -929,19 +929,14 @@ make destroy-data                             # the Docker volumes: every deck, 
 Every `clean` is a dry run until `--yes`; deleting a deck deletes its row and its jobs as well.
 Only the newest `keep_versions` versions of each deck are kept anyway (see Data model).
 
-To browse the bucket with the AWS CLI instead, give it
-the development credentials (your own AWS keys are rejected):
+The store is plain files, so you can also just look: `local/store/deckops/<deck_id>/` holds a
+deck's versions and runs. A reference `local://deckops/<key>` is the file
+`local/store/deckops/<key>`; references from when this was an S3 bucket (`s3://deckops/<key>`)
+name the same file. `make clean-scratch` never touches the store; `make destroy-data` deletes it.
 
-```bash
-aws configure set aws_access_key_id deckops --profile deckops
-aws configure set aws_secret_access_key deckops-dev-secret --profile deckops
-aws configure set region us-east-1 --profile deckops
-aws --profile deckops --endpoint-url http://localhost:9000 s3 ls s3://deckops/
-```
-
-Data does not travel with the code: decks and conversations are in this machine's Docker
-volumes. On another machine, set up, ingest the template again, and build there - or point both
-machines' `s3_endpoint` and `pg_dsn` at shared services.
+Data does not travel with the code: decks are in `local/store` and conversations in this
+machine's Postgres volume. On another machine, set up, ingest the template again, and build
+there - or copy `local/store` across and point `pg_dsn` at a shared Postgres.
 
 ## What is where
 
@@ -953,10 +948,10 @@ src/deck_agent/server.py   the MCP + REST server (deckops serve)
 src/deck_agent/db/     the decks and jobs tables: models, async engine, every read and write
 engine/deckops/        the engine: translation, byte-preserving saves, geometry checks
 runner/                what runs inside the sandbox image
-docker/                compose, the Dockerfiles, the S3 identities
+docker/                compose, the Dockerfiles
 config/                agent.example.json
 tests/unit/            tests that need nothing running (pytest; async ones with the anyio plugin)
-tests/integration/     tests that need Docker, Postgres and S3, and skip with a reason otherwise
+tests/integration/     tests that need Docker and Postgres, and skip with a reason otherwise
 tests/demo.py          a whole conversation with no model      -> make demo
 tests/data/specs/      hand-written slide specs: every piece drawn once
 llm.example.json       copy to llm.json

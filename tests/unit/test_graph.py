@@ -53,7 +53,7 @@ def test_create_then_edit_then_translate_in_one_session(offline_settings, upload
                                  planner=planner, log=lambda *a, **k: None, outline=OUTLINE)
     assert created["ok"], created
     assert created["route"] == "create"
-    assert created["deck"].startswith("s3://")
+    assert created["deck"].startswith("local://")
     assert created["versions"] == 1
     assert created["warnings"] == []
 

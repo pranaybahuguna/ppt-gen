@@ -89,7 +89,7 @@ def offline_settings(tmp_path):
     from deck_agent.db import engine as db_engine
 
     db_engine.reset()
-    storage.reset(storage.MemoryStore(s.s3_bucket))
+    storage.reset(storage.MemoryStore(s.store_name))
     checkpointer.reset_memory()
     yield s
     settings_module.reset(None)
@@ -122,16 +122,10 @@ def needs_sandbox():
 
 @pytest.fixture
 def needs_stack():
-    """Postgres and the S3 service, as `make up` starts them."""
+    """Postgres, as `make up` starts it (the store is a folder: always there)."""
     from deck_agent.settings import Settings
 
     s = Settings()
-    try:
-        from deck_agent.infra.storage import S3Store
-
-        S3Store(s).ensure_bucket()
-    except Exception as e:
-        pytest.skip(f"object storage is not available ({e.__class__.__name__}). Run: make up")
     try:
         from deck_agent.infra.checkpointer import checkpointer
 
@@ -165,12 +159,12 @@ def scratch_deck(needs_stack):
 
     from deck_agent.infra import cleanup
     from deck_agent.infra.checkpointer import checkpointer
-    from deck_agent.infra.storage import S3Store
+    from deck_agent.infra.storage import FileStore
 
+    st = FileStore(needs_stack.store_root, needs_stack.store_name)
     try:
         with checkpointer(needs_stack) as saver:
-            cleanup.execute(S3Store(needs_stack), saver,
-                            cleanup.plan_purge(S3Store(needs_stack), saver, made))
+            cleanup.execute(st, saver, cleanup.plan_purge(st, saver, made))
     except Exception as e:                       # noqa: BLE001
         print(f"could not clean up {made}: {e}")
 
@@ -178,11 +172,11 @@ def scratch_deck(needs_stack):
 @pytest.fixture
 def scratch_keys(needs_stack):
     """Object keys a storage test writes; deleted afterwards."""
-    from deck_agent.infra.storage import S3Store, Ref
+    from deck_agent.infra.storage import FileStore, Ref
 
     keys: list[str] = []
     yield keys
-    st = S3Store(needs_stack)
+    st = FileStore(needs_stack.store_root, needs_stack.store_name)
     try:
         st.delete([Ref(st.bucket, k).uri for k in keys])
     except Exception as e:                       # noqa: BLE001

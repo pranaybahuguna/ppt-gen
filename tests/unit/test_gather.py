@@ -118,8 +118,8 @@ def test_the_node_writes_a_checked_pack_from_a_document(offline_settings, planne
     assert all(supported(f["quote"], norm(README)) for f in facts)
     assert not any("make demo" in f["text"] for f in facts), "code is not a fact"
     assert any(f["source"].startswith("abc-README.md > Results") for f in facts)
-    assert store().exists(f"s3://{store().bucket}/g/r1/content_pack.json")
-    assert store().exists(f"s3://{store().bucket}/g/r1/gather_report.json")
+    assert store().exists(f"local://{store().bucket}/g/r1/content_pack.json")
+    assert store().exists(f"local://{store().bucket}/g/r1/gather_report.json")
 
 
 def test_too_little_context_asks_for_more(offline_settings, planner):

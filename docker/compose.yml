@@ -1,18 +1,13 @@
-# The three things that run as services. The fourth - the sandbox - is deliberately not one:
+# What runs as a service: Postgres. The sandbox is deliberately not a service:
 # it is an image, started as a throwaway container for one job and destroyed, so there is
 # nothing to keep running. `docker compose build sandbox` builds it; `make selftest` proves it.
 #
 #   postgres   the checkpointer: the conversation's state, one thread per deck session
-#   s3         object storage: every version of every deck, kits, previews, manifests
 #   sandbox    (build only) python + LibreOffice + poppler + fonts; no network, ever
 #   agent      (optional) the agent itself in a container; see the warning on its socket mount
 #
-# Why SeaweedFS and not MinIO: MinIO's public container images are no longer pullable without
-# a registry account, so a stack built on them does not start from a fresh clone. SeaweedFS is
-# a single small container with an S3 gateway that boto3 drives unchanged - buckets, objects,
-# listings and presigned URLs all behave - and it keeps its data in a volume. The agent talks
-# plain S3 through boto3 (`infra/storage.py`), so pointing it at a real S3, or at MinIO if you
-# have access to it, is two settings and no code.
+# Decks, templates, previews and manifests are files on the host, under local/store
+# (`infra/storage.py`); there is no object-storage service. The agent container mounts local/.
 #
 # Everything binds to localhost only and the credentials are development ones, written down on
 # purpose so that nothing has to be invented to get started. Do not carry them anywhere real.
@@ -37,32 +32,6 @@ services:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U deckops -d deckops"]
-      interval: 5s
-      timeout: 3s
-      retries: 20
-
-  s3:
-    image: chrislusf/seaweedfs:4.53
-    container_name: deckops-s3
-    restart: unless-stopped
-    # One process providing master, volume, filer and the S3 gateway. Plenty for a development
-    # stack, and it starts in seconds. `-s3.config` is what makes the access key mean something:
-    # without it SeaweedFS accepts any signature, which hides credential mistakes until they
-    # matter. See docker/seaweedfs/s3.json.
-    command: >
-      server -dir=/data -s3 -s3.port=8333
-      -s3.config=/etc/seaweedfs/s3.json
-      -master.volumeSizeLimitMB=1024
-    ports:
-      - "127.0.0.1:9000:8333"     # the S3 API, on the port the agent expects by default
-      - "127.0.0.1:9333:9333"     # the master's status page, for looking at what is stored
-    volumes:
-      - s3data:/data
-      - ./seaweedfs/s3.json:/etc/seaweedfs/s3.json:ro
-    healthcheck:
-      # The S3 gateway answers unauthenticated requests with a 403, which is proof enough that
-      # it is up and enforcing credentials.
-      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:8333 2>&1 | grep -qi 'access\\|xml' || wget -q --spider http://127.0.0.1:9333/cluster/status"]
       interval: 5s
       timeout: 3s
       retries: 20
@@ -99,17 +68,13 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      s3:
-        condition: service_healthy
     environment:
       DECKOPS_PG_DSN: postgresql://deckops:deckops-dev-secret@postgres:5432/deckops
-      DECKOPS_S3_ENDPOINT: http://s3:8333
       DECKOPS_SANDBOX_IMAGE: deckops/sandbox:0.1.0
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock   # see the warning above
-      - ../local:/app/local
+      - ../local:/app/local                           # the store (local/store) and scratch
     command: ["doctor"]
 
 volumes:
   pgdata:
-  s3data:

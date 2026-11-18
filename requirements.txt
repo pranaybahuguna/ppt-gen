@@ -1,8 +1,7 @@
-# --- the agent: graph, checkpointer, object storage ---
+# --- the agent: graph and checkpointer (the store is plain files) ---
 langgraph==1.2.20
 langgraph-checkpoint-postgres==3.2.0
 psycopg[binary,pool]==3.3.8
-boto3==1.44.0
 
 # --- the decks and jobs tables: SQLAlchemy (async) on Postgres through asyncpg ---
 SQLAlchemy[asyncio]==2.1.8
