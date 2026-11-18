@@ -95,12 +95,16 @@ def chart_palette(P: dict, *more: dict) -> list[str]:
     `more` are other readings of the same brand: the slides were drawn with the template's
     colours, while counting colours on the finished deck can name another one (its navy section
     panels outnumber everything) - a colour either reading calls the brand's is the brand's."""
+    from ..design.guide import guide_colours
+
     out = []
     for prof in (P, *more):
         c = with_palette(prof, "extended")["colours"]
         for k in _ORDER:
             if c.get(k) and c[k].upper() not in out:
                 out.append(c[k].upper())
+    for prof in (P, *more):                  # a template's official palette is all allowed
+        out += [x for x in guide_colours(prof) if x not in out and not _neutral(x)]
     return out
 
 
@@ -304,6 +308,34 @@ def text_findings(prs, slides: list[int], P: dict | None = None) -> dict[int, li
         if small:
             out[n] = [f"text too small to read when presented ({'; '.join(small[:3])}): make it at "
                       f"least {floor:g}pt and give it the room it needs"]
+    return out
+
+
+def house_findings(prs, slides: list[int], P: dict) -> dict[int, list[str]]:
+    """What breaks the template's checkable style rules (design.guide.house_problems) on each of
+    `slides`: titles, texts and table cells as they are now - whoever wrote them."""
+    from ..design.guide import checks_of, house_problems
+
+    checks = checks_of(P)
+    if not checks:
+        return {}
+    out: dict[int, list[str]] = {}
+    for n in slides:
+        if not 1 <= n <= len(prs.slides):
+            continue
+        slide = prs.slides[n - 1]
+        title = title_shape(slide)
+        texts = [("title", title.text_frame.text.strip())] if title is not None else []
+        for sh, _ in _leaves(slide.shapes):
+            if title is not None and sh.shape_id == title.shape_id:
+                continue
+            if sh.has_text_frame:
+                texts += [("body", p.text.strip()) for p in sh.text_frame.paragraphs if p.text.strip()]
+            elif getattr(sh, "has_table", False) and sh.has_table:
+                texts += [("body", c.text.strip()) for row in sh.table.rows for c in row.cells if c.text.strip()]
+        problems = house_problems(texts, checks)
+        if problems:
+            out[n] = problems
     return out
 
 

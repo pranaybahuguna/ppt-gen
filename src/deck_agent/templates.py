@@ -23,7 +23,12 @@ def ingest(source: str | Path, out: str | Path | None = None, make_default: bool
 
     Stores the file in `uploads/<hash>-<name>.pptx`. With make_default, it becomes
     `default_template`, both in config/agent.json and in this process's settings. With `out`,
-    the profile is also written there as JSON. `planner` is accepted for compatibility and unused.
+    the profile is also written there as JSON.
+
+    A template with guideline slides (a colour palette, a style guide, graphical elements) also
+    gets its guide read (design.guide.build_guide: the palette by code, the writing rules with
+    one call to `planner`, made from the settings when none is given) and stored beside it as
+    `<template>.guide.json`; every deck made on it then uses it.
 
     Called by: cli.cmd_template; server.ingest_template and the server's POST /templates.
     """
@@ -43,6 +48,18 @@ def ingest(source: str | Path, out: str | Path | None = None, make_default: bool
                                        "nowhere for a slide title to go"}
     template_id = sha256_file(source)
     uri = store().put(source, f"uploads/{template_id}-{source.name.replace(' ', '-')}")
+    from .design.guide import _guide_bytes, apply_guide, build_guide, guideline_slides
+
+    guide = None
+    if guideline_slides(Presentation(str(source))):
+        if planner is None:
+            from .llm.planner import planner as make_planner
+
+            planner = make_planner()
+        guide = build_guide(source, planner, log)
+        store().put_bytes(json.dumps(guide, indent=1, ensure_ascii=False).encode(), _guide_key(uri))
+        _guide_bytes.cache_clear()
+        profile = apply_guide(profile, guide)
     if make_default:
         cfg_path = REPO / "config" / "agent.json"
         cfg = json.loads(cfg_path.read_text()) if cfg_path.exists() else {}
@@ -53,6 +70,19 @@ def ingest(source: str | Path, out: str | Path | None = None, make_default: bool
         Path(out).write_text(json.dumps(profile, indent=1))
     log(f"  template: {uri}  layout={profile['layout']!r}  primary={profile['colours']['primary']} "
         f"accent={profile['colours']['accent']}  font={profile['font']}")
-    return {"ok": True, "template_id": template_id, "template": uri,
-            "default_template": bool(make_default), "slides": len(Presentation(str(source)).slides),
-            "profile": {k: profile[k] for k in ("layout", "blank_layout", "font", "body_pt", "colours")}}
+    out = {"ok": True, "template_id": template_id, "template": uri,
+           "default_template": bool(make_default), "slides": len(Presentation(str(source)).slides),
+           "profile": {k: profile[k] for k in ("layout", "blank_layout", "font", "body_pt", "colours")}}
+    if guide:
+        out["guide"] = {"guideline_slides": guide["slides"], "palette": guide["palette"],
+                        "rules": guide["rules"], "checks": guide["checks"],
+                        "graphical_elements": len(guide["graphics"]), "stored": uri + ".guide.json"}
+    return out
+
+
+def _guide_key(uri: str) -> str:
+    """The object key of a template's guide: the template's own key plus ".guide.json"."""
+    from .infra.storage import Ref
+
+    ref = Ref.parse(uri)
+    return ref.key + ".guide.json"

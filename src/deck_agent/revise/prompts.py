@@ -5,7 +5,7 @@ with the create path's spec writer, taken from design.prompts so the two never d
 
 Called by: llm.planner.AgentPlanner.split_edit / redesign_slide / tweak_slide / review_changes.
 """
-from ..design.prompts import SPEC_SYSTEM
+from ..design.prompts import HOUSE, SPEC_SYSTEM
 from ..sandbox.guard import ALLOWED_IMPORTS
 
 _GUIDE = SPEC_SYSTEM[SPEC_SYSTEM.index("The slide is rows"):SPEC_SYSTEM.index("Output only the JSON")]
@@ -33,7 +33,7 @@ PERSON = """"person_asked", when given, is what the person actually said, in the
 Look at the picture and decide what the person means. If the request names a cause the picture
 does not show (say "misspelled labels" when the labels are spelled fine but unreadable), follow
 the person's words and what you see, not the request. A change that leaves the slide looking
-the same has not done what was asked."""
+the same has not done what was asked.""" + "\n" + HOUSE
 
 
 SPLIT_SYSTEM = """You turn a request about an existing PowerPoint deck into tasks that can be done
@@ -300,6 +300,8 @@ number: if a figure is in neither the facts nor the datasets, say it is unsource
 supply one. With no facts or datasets given, do not call anything unsourced.
 
 "person_asked" is what the person said in this request; problems that go against it matter most.
+"house_rules", when given, are the template's style guide: a slide that breaks one (US spelling,
+"$31.5M" where the guide writes millions as "m", a title in Title Case) is a finding too.
 
 Return JSON:
 {"findings": [{"slide": <number>, "problem": "<what is wrong, quoting the slide>",

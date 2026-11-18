@@ -43,8 +43,11 @@ def storyline(state: DeckState, planner=None, log=print) -> dict:
         return {"route": "ask", "pending_question": "Which template should the deck follow? Attach the .pptx.",
                 "trace": [step("storyline", outcome="no template")]}
     pack = state.get("content_pack") or {"facts": [], "datasets": {}}
+    from .guide import load_guide
+
     story = plan_storyline(state.get("instruction") or "", pack, planner,
-                           state.get("slides_wanted") or "8-12", log)
+                           state.get("slides_wanted") or "8-12", log,
+                           house_rules=(load_guide(template) or {}).get("rules"))
     frame = [{"spec": spec, "plan": plan} for spec, plan in frame_specs(story)]
     with workspace(state) as ws:
         ws.publish_json(story, "storyline.json")       # a record of the run, not state: tidy may drop it
@@ -106,12 +109,12 @@ def write(payload: dict, planner=None, log=print) -> dict:
     Next: build, once every slide is written.
     """
     from ..nodes.common import workspace
+    from .guide import designed
     from .plan import write_spec
-    from .profile import extract_profile, with_palette
 
     with workspace(payload) as ws:
         template = ws.fetch(payload["template"], f"write-{payload['index']}-template.pptx")
-        P = with_palette(extract_profile(template), payload.get("palette"))
+        P = designed(template, payload["template"], payload.get("palette"))
         spec, problems, tries = write_spec(payload["plan"], payload["story"] or {}, payload["pack"] or {"facts": []},
                                            planner, template, P)
     log(f"  write slide {payload['index'] + 1}: {tries} tr{'y' if tries == 1 else 'ies'}"
@@ -132,7 +135,7 @@ def build(state: DeckState, log=print) -> dict:
     """
     from ..nodes.common import make_previews, publish_version, workspace
     from .plan import _fallback
-    from .profile import extract_profile, with_palette
+    from .guide import designed
     from .render import render_deck
 
     frame = state.get("deck_frame") or []
@@ -157,7 +160,7 @@ def build(state: DeckState, log=print) -> dict:
     with workspace(state) as ws:
         template = ws.fetch(state["template"], "template.pptx")
         out = ws.path("deck.pptx")
-        drawn = render_deck(template, specs, out, with_palette(extract_profile(template), state.get("palette")))
+        drawn = render_deck(template, specs, out, designed(template, state["template"], state.get("palette")))
         uri, versions = publish_version(state, ws, "deck.pptx")
         ws.publish_json({"story": state.get("story"), "specs": specs}, "specs.json")
         previews, why = make_previews(state, ws, out)

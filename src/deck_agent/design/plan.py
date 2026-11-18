@@ -84,7 +84,8 @@ def lint_story(story: dict, pack: dict) -> list[str]:
     return out
 
 
-def storyline(request: str, pack: dict, planner, slides_wanted: str = "8-12", log=print) -> dict:
+def storyline(request: str, pack: dict, planner, slides_wanted: str = "8-12", log=print,
+              house_rules: list[str] | None = None) -> dict:
     """The deck's argument, linted, and revised once if the lint finds problems.
 
     Called by: plan_deck.
@@ -92,6 +93,8 @@ def storyline(request: str, pack: dict, planner, slides_wanted: str = "8-12", lo
     payload = {"request": request,
                "facts": [{"id": f["id"], "text": f["text"]} for f in pack["facts"]],
                "datasets": pack.get("datasets") or {}, "slides_wanted": slides_wanted}
+    if house_rules:                     # the cover and section titles are written here
+        payload["house_rules"] = house_rules
     story = planner.storyline(payload)
     problems = lint_story(story, pack)
     if problems:
@@ -165,12 +168,16 @@ def _shrunk(slide, P: dict) -> list[str]:
 
 
 def check_spec(spec: dict, source_text: str, template, P: dict) -> list[str]:
-    """Every problem with one content spec: shape, invented numbers, text that will not fit."""
+    """Every problem with one content spec: shape, invented numbers, text that will not fit, and
+    what breaks the template's own style guide (design.guide)."""
+    from .guide import checks_of, house_problems, spec_texts
+
     problems = validate(spec)
     if not problems:
         problems += [f"the number {n} is not in the facts; copy numbers exactly from the facts, or drop it"
                      for n in unsourced(spec, source_text)]
         problems += dry_run(spec, template, P)
+        problems += house_problems(spec_texts(spec), checks_of(P))
     return problems
 
 
@@ -180,6 +187,8 @@ def write_spec(plan: dict, story: dict, pack: dict, planner, template, P: dict,
 
     Called by: plan_deck, in parallel for every content slide.
     """
+    from .guide import rules_of
+
     by_id = {f["id"]: f for f in pack["facts"]}
     cited = [by_id[f] for f in plan.get("facts") or [] if f in by_id]
     data = (pack.get("datasets") or {}).get(plan.get("dataset") or "")
@@ -190,7 +199,7 @@ def write_spec(plan: dict, story: dict, pack: dict, planner, template, P: dict,
                "slide": {k: plan.get(k) for k in ("title", "job", "visual", "section")},
                "facts": [{"id": f["id"], "text": f["text"]} for f in cited],
                "dataset": data, "tones": tone_names(P),
-               "palette": P.get("palette", "brand")}
+               "palette": P.get("palette", "brand"), **rules_of(P)}
     tried: list[tuple[dict, list[str]]] = []
     for _ in range(attempts):
         # A model call that fails is not a bad slide: it raises, so the run stops with the

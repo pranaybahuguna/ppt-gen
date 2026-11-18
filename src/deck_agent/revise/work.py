@@ -16,6 +16,7 @@ from pathlib import Path
 
 from pptx import Presentation
 
+from ..design.guide import checks_of, house_problems, rules_of, spec_texts
 from ..design.plan import dry_run
 from ..design.spec import tone_names, validate
 from .read import deck_outline, slide_content, slide_shapes
@@ -83,6 +84,7 @@ def redesign(task: dict, deck: Path, P: dict, planner, workdir: Path, attempts: 
         payload = {**_asked(task), "slide_number": n, "slide": content,
                    "deck_title": slide_content(prs.slides[0])["title"] if len(prs.slides) else ""}
     payload["tones"], payload["palette"] = tone_names(P), P.get("palette", "brand")
+    payload.update(rules_of(P))
     if feedback:
         payload["feedback"] = feedback
         if task.get("previous"):
@@ -95,7 +97,7 @@ def redesign(task: dict, deck: Path, P: dict, planner, workdir: Path, attempts: 
             continue
         spec.setdefault("type", "content")
         spec = _label_invented(spec, task["instruction"])
-        problems = validate(spec) or dry_run(spec, deck, P)
+        problems = (validate(spec) or dry_run(spec, deck, P)) + house_problems(spec_texts(spec), checks_of(P))
         tried.append((spec, problems))
         if not problems:
             break
@@ -128,7 +130,7 @@ def tweak(task: dict, deck: Path, P: dict, planner, workdir: Path, attempts: int
     if draw:                      # a free redraw of the content area, in the deck's own colours
         ctx.update({"body_in": P["area"], "colours": P["colours"], "font": P["font"]})
     payload = {**_asked(task), "slide_number": n, **ctx,
-               "shapes": slide_shapes(prs.slides[n - 1])}
+               "shapes": slide_shapes(prs.slides[n - 1]), **rules_of(P)}
     if draw:
         payload["content"] = slide_content(prs.slides[n - 1])
     ask = planner.draw_slide if draw else planner.tweak_slide
@@ -176,7 +178,7 @@ def deck_change(task: dict, deck: Path, P: dict, planner, workdir: Path, attempt
     payload = {**_asked(task), "applies_to_slides": slides,
                "samples": [{"slide": n, "shapes": slide_shapes(prs.slides[n - 1])} for n in sample],
                "slide_w_in": ctx["slide_w_in"], "slide_h_in": ctx["slide_h_in"],
-               "colours": P["colours"], "font": P["font"]}
+               "colours": P["colours"], "font": P["font"], **rules_of(P)}
     if feedback:
         payload["feedback"] = feedback
     pngs = [p for p in (slide_picture(deck, n - 1, workdir / f"s{n}") for n in sample[:2]) if p]

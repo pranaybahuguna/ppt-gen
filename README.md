@@ -409,7 +409,9 @@ numbers. In: the whole current deck, its slide roles, its palette, its facts and
     colours, and every colour is on the palette (the brand's and its extended hues, as the
     template and the deck both read it; greys stay);
   * every content slide's title at the size most of them use, where it still fits two lines.
-* Found by plain code: text smaller than anything the template itself uses.
+* Found by plain code: text smaller than anything the template itself uses; and, for a
+  template with a style guide, every title, text and table cell that breaks its checkable rules
+  (US spelling, "$31.5M" where the guide writes "$31.5m", Title Case titles, "€ 5m", ...).
 * Found by **one text-only model call** (once per request): every slide's text, tables and charts
   (categories, series, values, axis titles, number formats, colours) next to the facts and the
   datasets the charts were drawn from - a unit or axis title that does not match the data, a
@@ -557,6 +559,22 @@ built on, where the title sits, the safe area for content, the real brand colour
 what the slides paint, not from the theme, which is often the Office default), and its fonts -
 stores it in `uploads/` in the bucket, and prints what it found. `--make-default` makes it the
 template decks use; a create request can also name any template directly.
+
+**Templates that carry their own guidelines.** Many corporate templates include slides that are
+instructions rather than examples: a *colour palette* with the official swatches, a *style
+guide* (spelling, number and currency formats, capital letters, punctuation), *graphical
+elements*. Ingesting such a template also reads those (`src/deck_agent/design/guide.py`):
+
+| Guideline slide | Read by | Used for |
+|---|---|---|
+| colour palette | code: each swatch's fill, checked against the "R 000 G 145 B 090" or "#00915A" written on it, grouped by its row's label | the deck's colours: the first main colour is the primary, the darkest its dark shade, the one furthest from it the accent; highlight colours mark what must stand out; greys give muted text, lines and panels. "More colour" picks from the same palette |
+| style guide | one model call: the rules, in short, and the ones code can check (`spelling`, `title_case`, `bullet_full_stop`, `currency_symbol`, `space_before_unit`, `thousands_separator`, `scale`, `date_format`) | every model that writes words on a slide gets the rules (`house_rules`); code checks every slide spec, and the deck check every finished slide, against the checkable ones |
+| graphical elements | code: each element's name, kind and place | a catalogue, kept with the guide |
+
+The guide is stored beside the template as `<template>.guide.json` and printed by the ingest.
+Every deck made on that template - created, edited or checked - is drawn and checked with it.
+Guideline slides never count as the template's own text or colours, and are never left in a deck.
+A template without such slides works exactly as before.
 
 ### 5. Make a deck
 
@@ -929,7 +947,7 @@ machines' `s3_endpoint` and `pg_dsn` at shared services.
 
 ```
 src/deck_agent/        the agent: graph, state, nodes, model layer, sandbox clients, storage
-src/deck_agent/design/ create: design profile, text measuring, pieces, renderer, specs, storyline
+src/deck_agent/design/ create: design profile, a template's own guidelines, text measuring, pieces, renderer, specs, storyline
 src/deck_agent/revise/ edit: reading any slide, slide surgery, split / work / join / review, the deck check
 src/deck_agent/server.py   the MCP + REST server (deckops serve)
 src/deck_agent/db/     the decks and jobs tables: models, async engine, every read and write

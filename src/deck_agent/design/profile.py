@@ -42,7 +42,7 @@ def _mix(hex6: str, other: str, t: float) -> str:
     return "".join(f"{round(x + (y - x) * t):02X}" for x, y in zip(a, b))
 
 
-def brand_colours(prs) -> dict[str, str]:
+def brand_colours(prs, skip: set[int] = frozenset()) -> dict[str, str]:
     """The template's colours by role, counted from what its slides actually paint.
 
     Saturated colours are grouped into hue families; the family used most for fills is one
@@ -53,7 +53,9 @@ def brand_colours(prs) -> dict[str, str]:
     Called by: extract_profile.
     """
     fills, every = Counter(), Counter()
-    for slide in prs.slides:
+    for n, slide in enumerate(prs.slides, start=1):
+        if n in skip:                                  # guideline slides show every colour once
+            continue
         xml = etree.tostring(slide._element).decode()
         fills.update(c.upper() for c in _FILL.findall(xml))
         every.update(c.upper() for c in _ANY.findall(xml))
@@ -126,7 +128,11 @@ def with_palette(P: dict, palette: str | None) -> dict:
     """
     if palette != "extended":
         return {**P, "palette": "brand"}
-    return {**P, "palette": "extended", "colours": {**P["colours"], **extended_palette(P["colours"])}}
+    # A template with its own palette (design.guide) supplies the extra colours itself.
+    from .guide import extended_from_guide
+
+    extra = extended_from_guide(P, EXTRA_HUES) or extended_palette(P["colours"])
+    return {**P, "palette": "extended", "colours": {**P["colours"], **extra}}
 
 
 _MORE_COLOUR = re.compile(r"\b(more colou?r\w*|colou?rful|bolder|vibrant|bright\w*|"
@@ -165,19 +171,64 @@ def _content_layout(prs):
     return layouts.get(used.most_common(1)[0][0]) if used else prs.slide_layouts[0]
 
 
-def _title_placeholder_look(prs) -> dict:
+def _title_placeholder_look(prs, layout: str | None = None) -> dict:
     """How the template's own slides style their titles (colour, font, size), most common first;
-    an empty dict when no slide has a title box to learn from."""
+    an empty dict when no slide has a title box to learn from.
+
+    With `layout`, only slides on that (content) layout count - a cover's white title says nothing
+    about content titles. What no slide sets explicitly comes from the master's title style.
+    """
     from .chrome import look
 
-    looks = [look(s.shapes.title) for s in prs.slides
-             if s.shapes.title is not None and s.shapes.title.text_frame.text.strip()]
+    slides = [s for s in prs.slides if s.shapes.title is not None and s.shapes.title.text_frame.text.strip()]
+    if layout and any(s.slide_layout.name == layout for s in slides):
+        slides = [s for s in slides if s.slide_layout.name == layout]
+    looks = [look(s.shapes.title) for s in slides]
     out = {}
     for key in ("colour", "font", "pt"):
         vals = Counter(lk[key] for lk in looks if lk[key])
         if vals:
             out[key] = vals.most_common(1)[0][0]
-    return out
+    # The master fills in colour and font only: its size is a default slides rarely keep.
+    master = _master_title_style(prs)
+    return {**{k: master[k] for k in ("colour", "font") if master.get(k)}, **out}
+
+
+def _cover_look(prs, layout: str | None) -> dict | None:
+    """How the template's own example cover styles its title and subtitle text: a cover layout
+    over photographs usually wants a white title the master's style does not say. -> {"title":
+    look, "subtitle": look} (design.chrome.look), or None without an example cover."""
+    from .chrome import look
+
+    if not layout or not len(prs.slides) or prs.slides[0].slide_layout.name != layout:
+        return None
+    out = {}
+    for ph in prs.slides[0].placeholders:
+        kind = ph.placeholder_format.type
+        name = "title" if kind in (PP_PLACEHOLDER.CENTER_TITLE, PP_PLACEHOLDER.TITLE) else \
+            "subtitle" if kind == PP_PLACEHOLDER.SUBTITLE else None
+        if name and ph.has_text_frame and ph.text_frame.text.strip():
+            out[name] = look(ph)
+    return out or None
+
+
+def _master_title_style(prs) -> dict:
+    """The slide master's title style: colour (an RGB colour only), font and size."""
+    from pptx.oxml.ns import qn
+
+    try:
+        rpr = prs.slide_master.element.find(qn("p:txStyles")).find(qn("p:titleStyle")) \
+            .find(qn("a:lvl1pPr")).find(qn("a:defRPr"))
+    except AttributeError:
+        return {}
+    if rpr is None:
+        return {}
+    clr = rpr.find(f"{qn('a:solidFill')}/{qn('a:srgbClr')}")
+    latin = rpr.find(qn("a:latin"))
+    font = latin.get("typeface") if latin is not None else None
+    return {"colour": clr.get("val").upper() if clr is not None else None,
+            "font": font if font and not font.startswith("+") else None,
+            "pt": int(rpr.get("sz")) / 100 if rpr.get("sz") else None}
 
 
 def _cover_layout(prs) -> str | None:
@@ -189,10 +240,18 @@ def _cover_layout(prs) -> str | None:
     return next((l.name for l in prs.slide_layouts if is_cover(l)), None)
 
 
-def _fonts_and_sizes(prs) -> tuple[str, float, float]:
-    """(the font most text uses, the commonest body size, the next smaller one), by characters."""
+_CLOSING = re.compile(r"\b(thank you|thanks|any questions|questions\?|merci)\b", re.I)
+
+
+def _fonts_and_sizes(prs, skip: set[int] = frozenset()) -> tuple[str, float, float]:
+    """(the font most text uses, the commonest body size, the next smaller one), by characters.
+    Slides in `skip` (guideline slides: a style guide's table is set small on purpose) and a
+    closing "Thank you" slide (display type, not body text) do not count."""
     fonts, sizes = Counter(), Counter()
-    for slide in prs.slides:
+    for n, slide in enumerate(prs.slides, start=1):
+        words = " ".join(sh.text_frame.text for sh in slide.shapes if sh.has_text_frame)
+        if n in skip or _CLOSING.search(words) and len(words.split()) < 15:
+            continue
         for sh in slide.shapes:
             if not sh.has_text_frame or sh.is_placeholder:
                 continue
@@ -230,14 +289,17 @@ def extract_profile(template: str | Path) -> dict:
         tx, ty, tw, th = (v / EMU for v in (title.left, title.top, title.width, title.height))
     else:                                    # nothing to learn from: a standard header position
         tx, ty, tw, th = 0.5, 0.35, W - 1.0, 0.9
-    tlook = _title_placeholder_look(prs)
+    tlook = _title_placeholder_look(prs, layout.name)
+    from .guide import guideline_slides
+
+    guidance = set(guideline_slides(prs))
 
     # The safe area: under the title, above whatever the layout puts along the bottom (footer,
     # page number, rules), with the title's left margin on both sides.
     bottoms = [sh.top / EMU for sh in layout.shapes
                if sh.top / EMU > H * 0.8 and sh.height / EMU < H * 0.2]
     floor = min(bottoms) if bottoms else H - 0.6
-    font, body_pt, small_pt = _fonts_and_sizes(prs)
+    font, body_pt, small_pt = _fonts_and_sizes(prs, guidance)
     # For full-bleed slides (cover, section): a layout with no title box and the least on it.
     untitled = [l for l in prs.slide_layouts
                 if not any(ph.placeholder_format.type in (PP_PLACEHOLDER.TITLE, PP_PLACEHOLDER.CENTER_TITLE)
@@ -250,6 +312,7 @@ def extract_profile(template: str | Path) -> dict:
         "layout": layout.name,
         "blank_layout": blank.name if blank is not None else None,
         "cover_layout": _cover_layout(prs),
+        "cover_look": _cover_look(prs, _cover_layout(prs)),
         # The template's own title look when its slides show one; otherwise the title keeps
         # whatever its layout gives it (colour None: not overridden).
         "title": {"box": [round(tx, 3), round(ty, 3), round(tw, 3), round(th, 3)],
@@ -259,7 +322,7 @@ def extract_profile(template: str | Path) -> dict:
                  round(floor - 0.14 - (ty + th + 0.08), 3)],
         "font": font, "body_pt": body_pt, "small_pt": small_pt,
         "title_rule": True,                  # a thin accent line under every content slide's title
-        "colours": brand_colours(prs),
+        "colours": brand_colours(prs, guidance),
     }
 
 

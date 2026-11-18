@@ -117,6 +117,13 @@ class AgentPlanner(OpenAICompatPlanner):
 
         return self._maybe_images(REVIEW_SYSTEM, payload, pngs)
 
+    def house_rules(self, payload: dict) -> dict:
+        """A template's style-guide slides -> {"rules", "checks"}. Called by: design.guide.build_guide,
+        once, when the template is ingested."""
+        from ..design.prompts import HOUSE_RULES_SYSTEM
+
+        return self._chat(HOUSE_RULES_SYSTEM, json.dumps(payload, ensure_ascii=False))
+
     def audit_deck(self, payload: dict) -> dict:
         """The whole deck as text (charts' numbers, units, axis titles, colours) + the source
         facts -> findings across slides. Called by: revise.nodes.audit."""
@@ -235,6 +242,9 @@ class StubAgentPlanner(StubPlanner):
 
     def audit_deck(self, payload: dict) -> dict:
         return {"findings": []}
+
+    def house_rules(self, payload: dict) -> dict:
+        return {"rules": [], "checks": {}}
 
     def route(self, instruction: str, context: dict) -> dict:
         """Offline routing: the rules alone (rules_route).

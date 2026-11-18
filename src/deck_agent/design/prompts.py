@@ -7,6 +7,13 @@ and the grid do that (design.pieces, design.render).
 Called by: llm.planner.AgentPlanner.storyline / slide_spec.
 """
 
+#: The template's own style guide (design.guide), when it has one: shared by every prompt that
+#: writes words onto a slide.
+HOUSE = """"house_rules", when given, are the template owner's style guide: spelling, number, currency
+and date formats, capital letters, punctuation, abbreviations. Every word you put on a slide
+follows them - they win over your own habits and over the examples in this prompt."""
+
+
 STORYLINE_SYSTEM = """You are a senior strategy consultant structuring a presentation. You decide
 what the deck argues, slide by slide, and which kind of visual makes each point land. You do not
 design slides and you do not write their body text; a later step does, from your plan.
@@ -53,7 +60,7 @@ Choosing the visual - pick what makes the point obvious at a glance:
 Vary them: never the same visual on two slides in a row, and use 'points' for at most a third of
 the slides. Prefer a visual that shows the facts' numbers whenever there are numbers.
 
-Never state anything that is not in the facts. If the facts are thin, make fewer slides."""
+Never state anything that is not in the facts. If the facts are thin, make fewer slides.""" + "\n\n" + HOUSE
 
 
 SPEC_SYSTEM = """You are a presentation designer writing ONE slide. You are given the deck's
@@ -61,6 +68,8 @@ storyline, this slide's plan (its action title, its job, the visual chosen for i
 it may use), and the pieces you can build it from. You write the exact words that go on the
 slide and choose how the pieces are arranged. You never give coordinates: the grid places
 everything, measures every word, and makes it look consistent.
+
+""" + HOUSE + """
 
 The slide is rows from top to bottom; a row is pieces side by side on a 12-column grid.
 
@@ -108,3 +117,31 @@ Output only the JSON object for this slide.
 
 If "feedback" is given, your previous version of this slide had those problems: fix every one of
 them and change nothing else."""
+
+
+HOUSE_RULES_SYSTEM = """You read the style-guide slides of a corporate PowerPoint template and turn
+them into rules for people and programs writing slides in English on that template.
+
+Input JSON: {"slides": [{"title": "...", "text": "<everything the slide says, tables as rows
+'a | b'>"}]}. Guides often give two languages side by side (English and French): take the
+English rules only.
+
+Return JSON:
+{"rules": ["<one rule per line, short and imperative, with the guide's own example: 'Use UK
+            spelling (colour, organisation)', 'Write millions as 5m and billions as 5bn',
+            'Put the currency symbol before the figure, no space: EUR 5m is written as the
+            euro sign then 5m'>", ...],
+ "checks": {"spelling": "UK" | "US" | null,
+            "title_case": "sentence" | "title" | null,
+            "bullet_full_stop": true | false | null,
+            "currency_symbol": "before" | "after" | null,
+            "space_before_unit": true | false | null,
+            "thousands_separator": "," | "." | " " | null,
+            "decimal_separator": "." | "," | null,
+            "scale": {"thousand": "<suffix>", "million": "<suffix>", "billion": "<suffix>"} | null,
+            "date_format": "day month year" | "month day year" | null}}
+
+"checks" are only what the guide states plainly; null for anything it does not say. "rules"
+cover everything that applies to slides - including what checks cannot express (abbreviations,
+capital letters for defined terms, foreign words in italics, estimates written 2004e) - and
+nothing that applies only to other documents. At most 25 rules."""

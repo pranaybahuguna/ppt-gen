@@ -111,7 +111,8 @@ def after_split(state: DeckState):
 
 def _payload(state: DeckState, task: dict, deck: str, feedback: list[str] | None = None) -> dict:
     return {"thread_id": state.get("thread_id"), "run_id": state.get("run_id"), "task": task,
-            "deck": deck, "feedback": feedback, "palette": state.get("palette")}
+            "deck": deck, "feedback": feedback, "palette": state.get("palette"),
+            "template": state.get("template")}
 
 
 # --------------------------------------------------------------------------- work
@@ -123,14 +124,14 @@ def work(payload: dict, planner=None, log=print) -> dict:
     Writes: task_results (+1).
     Next: join, once every task of the round has finished.
     """
-    from ..design.profile import extract_profile, with_palette
+    from ..design.guide import designed
     from ..nodes.common import workspace
     from . import work as w
 
     task = payload["task"]
     with workspace(payload) as ws:
         deck = ws.fetch(payload["deck"], f"work-{task['id']}-r{task.get('round', 0)}.pptx")
-        P = with_palette(extract_profile(deck), payload.get("palette"))
+        P = designed(deck, payload.get("template"), payload.get("palette"))
         scratch = Path(ws.dir(f"work-{task['id']}-r{task.get('round', 0)}"))
         do = w.tweak if task["kind"] in CODE_KINDS else w.deck_change if task["kind"] == "deck" else w.redesign
         result = do(task, deck, P, planner, scratch, feedback=payload.get("feedback"))
@@ -151,7 +152,7 @@ def join(state: DeckState, log=print) -> dict:
     Writes: deck_versions (+1), previews, changelog, changed, errors.
     Next: review.
     """
-    from ..design.profile import extract_profile, with_palette
+    from ..design.guide import designed
     from ..engine.deck import reseal
     from ..nodes.common import make_previews, publish_version, workspace
     from ..sandbox.code import run_builder
@@ -182,7 +183,7 @@ def join(state: DeckState, log=print) -> dict:
 
     with workspace(state) as ws:
         deck = ws.fetch(base_uri, f"join-base-r{rnd}.pptx")
-        P = with_palette(extract_profile(deck), state.get("palette"))
+        P = designed(deck, state.get("template"), state.get("palette"))
         out = ws.path(f"join-r{rnd}.pptx")
         done = apply_changes(deck, [{k: v for k, v in c.items() if k != "task"} for c in changes], P, out)
         position = done["position"]
@@ -466,7 +467,7 @@ def audit(state: DeckState, planner=None, log=print) -> dict:
             revise, edit_tasks, edit_round when slides go back.
     Next: after_audit -> work | deliver.
     """
-    from ..design.profile import extract_profile, with_palette
+    from ..design.guide import designed, rules_of
     from ..engine import bootstrap
     from ..nodes.common import make_previews, publish_version, workspace
     from . import audit as A
@@ -484,19 +485,22 @@ def audit(state: DeckState, planner=None, log=print) -> dict:
     out: dict = {}
     with workspace(state) as ws:
         deck = ws.fetch(uri, f"audit-r{rnd}.pptx")
-        P = with_palette(extract_profile(deck), state.get("palette"))
+        P = designed(deck, state.get("template"), state.get("palette"))
         # The slides were drawn with the template's colours: those are the brand's too.
-        brand = [extract_profile(ws.fetch(state["template"], "audit-template.pptx"))] \
+        brand = [designed(ws.fetch(state["template"], "audit-template.pptx"), state["template"])] \
             if state.get("template") else []
         prs = Presentation(str(deck))
         roles = {o["slide"]: o["role"] for o in deck_outline(prs)}
         content = [n for n, r in roles.items() if r == "content"]
         fixed = A.fix_deck(prs, P, content, list(roles), *brand)
         found = A.text_findings(prs, content, P)
+        for n, problems in A.house_findings(prs, content, P).items():   # the template's style guide
+            found.setdefault(n, []).extend(problems)
         if model_pass:
             try:
                 answer = planner.audit_deck({"person_asked": state.get("instruction") or "",
-                                             "slides": A.inventory(prs, roles), **_sources(state)})
+                                             "slides": A.inventory(prs, roles), **_sources(state),
+                                             **rules_of(P)})
             except Exception as e:            # a check that could not run is a warning, not a failure
                 answer = {}
                 notes.append(f"audit: the deck check's model call failed ({str(e)[:120]})")

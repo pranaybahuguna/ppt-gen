@@ -294,6 +294,29 @@ def render_section(slide, spec: dict, P: dict) -> list[str]:
     return []
 
 
+def _fill_cover_box(ph, value: str, lk: dict | None, P: dict, bold: bool) -> list[str]:
+    """One cover box: its text in the example cover's look, at the largest size that fits."""
+    from pptx.util import Pt
+
+    lk = lk or {}
+    font = lk.get("font") or P["font"]
+    w, h = (ph.width or 0) / 914400 - 0.2, (ph.height or 0) / 914400 - 0.1
+    top = lk.get("pt") or (40 if bold else 18)
+    pt = measure.fit(value, w, h, top, min(top, 10), family=font, bold=bool(lk.get("bold", bold)))
+    ph.text_frame.text = value
+    ph.text_frame.word_wrap = True
+    for p in ph.text_frame.paragraphs:
+        for r in p.runs:
+            r.font.size = Pt(pt or min(top, 10))
+            if lk.get("colour"):
+                r.font.color.rgb = _rgb(lk["colour"])
+            if lk.get("bold") is not None:
+                r.font.bold = lk["bold"]
+            if lk.get("font"):
+                r.font.name = lk["font"]
+    return [] if pt else [f"cover: '{value[:40]}' is too long for its box; shorten it"]
+
+
 def _subtitle(slide, box: Box, value: str, pt: float, P: dict) -> None:
     """The subtitle line under the title."""
     from .pieces import text
@@ -415,16 +438,23 @@ def _drawn_cover(slide, spec: dict, P: dict) -> list[str]:
 
 
 def _layout_cover(slide, spec: dict, P: dict) -> list[str]:
-    """The template's own cover layout: its title and subtitle boxes filled, the rest left out."""
+    """The template's own cover layout: its title and subtitle boxes filled, the rest left out.
+
+    The text takes the look of the template's example cover (P["cover_look"]: a white title over
+    photographs, small bold capitals in a tag) and is sized to fit its box - a cover layout's
+    boxes are drawn for a short title and a short line, not for a paragraph.
+    """
     sub = "\n".join(v for v in (spec.get("subtitle"), spec.get("meta")) if v)
+    looks = P.get("cover_look") or {}
+    problems = []
     for ph in list(slide.placeholders):
         kind = ph.placeholder_format.type
         if kind == PP_PLACEHOLDER.CENTER_TITLE:
-            ph.text_frame.text = spec["title"]
+            problems += _fill_cover_box(ph, spec["title"], looks.get("title"), P, bold=True)
         elif kind == PP_PLACEHOLDER.SUBTITLE and sub:
-            ph.text_frame.text = sub
+            problems += _fill_cover_box(ph, sub, looks.get("subtitle"), P, bold=False)
         else:
             ph._element.getparent().remove(ph._element)
     if spec.get("notes"):
         slide.notes_slide.notes_text_frame.text = spec["notes"]
-    return []
+    return problems
