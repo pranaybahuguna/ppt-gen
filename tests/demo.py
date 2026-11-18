@@ -144,8 +144,8 @@ def main() -> int:
     print("   or no ops here: the route, the fingerprints and the checks are what is being shown")
     show(facade.translate_deck(DECK, "fr", [1, 2], planner=planner))
 
-    heading("4. ask - something we do not do; it says so plainly")
-    show(facade.ask_deck(DECK, "restyle this onto the new corporate template", planner=planner))
+    heading("4. ask - a vague one; the rules are unsure, so it asks rather than guesses")
+    show(facade.ask_deck(DECK, "rebrand the deck", planner=planner))
 
     heading("5. ask - too vague, so the graph stops and asks")
     asked = show(facade.ask_deck(DECK, "do the thing with this deck", planner=planner))

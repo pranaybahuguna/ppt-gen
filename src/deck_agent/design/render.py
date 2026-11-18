@@ -93,12 +93,44 @@ def _title(slide, spec: dict, P: dict) -> list[str]:
         pt = t["min_pt"]
     tf = ph.text_frame
     tf.text = spec["title"]
-    if spec.get("subtitle"):
-        tf.vertical_anchor = MSO_ANCHOR.BOTTOM        # hug the subtitle, not float above it
+    # Always from the top of the box: one line or two, subtitle or not, the first line of every
+    # title sits at the same distance from the top of the slide.
+    tf.vertical_anchor = MSO_ANCHOR.TOP
     for r in tf.paragraphs[0].runs:
         r.font.size, r.font.bold, r.font.name = Pt(pt), True, t["font"]
         r.font.color.rgb = _rgb(t["colour"])
     return problems
+
+
+#: The rule under a content slide's title: this far below the title box, and content starts
+#: this far below the rule. Fixed, so every content slide matches.
+RULE_GAP, AFTER_RULE = 0.06, 0.2
+RULE_NAME = "title-rule"
+
+
+def title_rule_y(P: dict) -> float:
+    """Where the title rule goes on every content slide, in inches from the top."""
+    _, y, _, h = P["title"]["box"]
+    return y + h + RULE_GAP
+
+
+def draw_title_rule(slide, P: dict):
+    """The thin accent line that separates a content slide's title from its content.
+
+    Called by: render_slide; revise.house.align_titles.
+    """
+    from .pieces import line
+
+    area = Box(*P["area"])
+    y = title_rule_y(P)
+    c = line(slide, area.x, y, area.right, y, P["colours"]["accent"], 1.0)
+    c.name = RULE_NAME
+    return c
+
+
+def content_top(P: dict) -> float:
+    """Where content starts on a content slide: below the title rule when there is one."""
+    return title_rule_y(P) + AFTER_RULE if P.get("title_rule", True) else P["area"][1] + 0.15
 
 
 def _cells(row_box: Box, items: list[dict]) -> list[Box]:
@@ -120,12 +152,14 @@ def render_slide(slide, spec: dict, P: dict) -> list[str]:
     """
     problems = _title(slide, spec, P)
     area = Box(*P["area"])
+    if P.get("title_rule", True):
+        draw_title_rule(slide, P)
+    top = content_top(P)
+    area = Box(area.x, top, area.w, area.bottom - top)
     if spec.get("subtitle"):
         spt = P["body_pt"] + 3
-        sub, area = area.take_top(measure.height_in(1, spt) + 0.02, gap=0.3)
+        sub, area = area.take_top(measure.height_in(1, spt) + 0.02, gap=0.25)
         _subtitle(slide, sub, spec["subtitle"], spt, P)
-    else:
-        area = Box(area.x, area.y + 0.15, area.w, area.h - 0.15)
     if spec.get("footnote"):
         fpt = P["small_pt"] - 1
         lines = len(measure.wrap(spec["footnote"], fpt, area.w, P["font"], italic=True))

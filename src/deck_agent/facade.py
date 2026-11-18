@@ -17,6 +17,8 @@ one branch, not five:
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 import uuid
 
 from .graph import deck_graph
@@ -44,18 +46,21 @@ def _run_id() -> str:
 
 
 def _keep_recent_versions(deck_id: str, result: dict, s: Settings) -> dict:
-    """`keep_versions`: after a delivered turn, keep the newest N versions and delete the rest.
+    """After a delivered request: one version per request, then the newest `keep_versions`.
 
-    Every version is a whole copy of the deck - 16-22 MB with a picture-heavy template - and
-    only the newest two are ever used: the current one, and the one undo goes back to. The
-    older ones are dropped from the conversation's state first, then their files deleted, so a
+    A request can publish several versions on its way - an edit's first pass, then the pass the
+    review sent it round for. Only the last is the request's result; the ones before it are
+    dropped here, so every version that remains is the deck after one request, and undo goes
+    back exactly one request. Then, with `keep_versions` on, only the newest N are kept (2 =
+    the current deck and the one undo goes back to).
+
+    Versions are dropped from the conversation's state first, then their files deleted, so a
     failure halfway leaves files nothing points at (which `clean --orphans` finds), never a
     state pointing at files that are gone.
 
     Called by: _invoke and answer, after each turn that produced a deck.
     """
-    keep = s.keep_versions
-    if keep <= 0 or not result.get("deck"):
+    if not result.get("deck"):
         return result
     from .infra.checkpointer import checkpointer
     from .infra.storage import store
@@ -65,16 +70,24 @@ def _keep_recent_versions(deck_id: str, result: dict, s: Settings) -> dict:
 
         graph = build_graph(None, lambda *a, **k: None).compile(checkpointer=saver)
         snapshot = graph.get_state(_config(deck_id))
-        versions = list((snapshot.values if snapshot else {}).get("deck_versions") or [])
-        if len(versions) <= keep:
+        values = snapshot.values if snapshot else {}
+        versions = list(values.get("deck_versions") or [])
+        base = min(values.get("turn_base") or 0, len(versions))
+        passes = versions[base:-1]                       # this request's intermediate versions
+        kept = versions[:base] + versions[-1:]
+        if s.keep_versions > 0 and len(kept) > s.keep_versions:
+            old, kept = kept[:-s.keep_versions], kept[-s.keep_versions:]
+        else:
+            old = []
+        dropped = passes + old
+        if not dropped:
             return result
-        dropped = versions[:-keep]
-        graph.update_state(_config(deck_id), {"deck_versions": versions[-keep:]})
+        graph.update_state(_config(deck_id), {"deck_versions": kept})
     try:
         store(s).delete(dropped)
     except Exception:                                    # noqa: BLE001 - orphans, found by clean
         pass
-    return {**result, "versions": keep, "versions_deleted": len(dropped)}
+    return {**result, "versions": len(kept), "versions_deleted": len(dropped)}
 
 
 def _tidy_if_asked(deck_id: str, result: dict, s: Settings) -> dict:
@@ -137,6 +150,10 @@ def _invoke(deck_id: str, payload: dict, planner=None, log=print, s: Settings | 
             state = turn_reset(payload.get("instruction", ""), payload.get("run_id") or _run_id(),
                                turn, **{k: v for k, v in payload.items()
                                         if k not in ("instruction", "run_id")})  # type: ignore
+        # Where this request's versions begin: undo goes back to the version before it.
+        start = payload["deck_versions"] if "deck_versions" in payload else (
+            (existing.values.get("deck_versions") if existing and existing.values else None) or [])
+        state["turn_base"] = len(start)
         out = graph.invoke(state, config=_config(deck_id))
         if out.get("__interrupt__"):
             question = out["__interrupt__"][0].value
@@ -183,10 +200,43 @@ def translate_deck(deck_id: str, lang: str, slides: list[int] | None = None,
                              "slide_scope": slides, "route": "translate", **kw}, planner, log)
 
 
+def attach_deck(deck_id: str, deck_uri: str, instruction: str | None = None, planner=None,
+                log=print, s: Settings | None = None) -> dict:
+    """Make an existing .pptx this deck's newest version, then do what the instruction says.
+
+    The file is checked like any upload, copied into the deck's folder as the next version, and
+    the instruction runs on it - whether or not the deck already had versions (attaching is how
+    a hand-edited copy comes back). Earlier versions stay, so undo can go back to them. A file
+    meant as a *template* is passed to create_deck instead.
+
+    Called by: cli.cmd_attach; the server's POST /decks/{id}/attach.
+    """
+    import tempfile
+
+    from .engine import guard_deck
+    from .infra.storage import store
+    from .nodes.common import version_number
+
+    s = s or settings()
+    with deck_graph(planner, lambda *a, **k: None, s) as graph:
+        existing = graph.get_state(_config(deck_id))
+        versions = list((existing.values if existing and existing.values else {}).get("deck_versions") or [])
+    data = store(s).get_bytes(deck_uri)
+    with tempfile.TemporaryDirectory(dir=s.workspace_root) as tmp:
+        local = Path(tmp) / "attached.pptx"
+        local.write_bytes(data)
+        guard_deck(local)                               # untrusted input: check the archive first
+    newest = version_number(versions[-1]) if versions else 0
+    new = store(s).put_bytes(data, f"{deck_id}/v{(newest or len(versions)) + 1:03d}.pptx")
+    text = instruction or "what can you do with this deck?"
+    return _invoke(deck_id, {"instruction": text, "deck_versions": versions + [new],
+                             "source_deck": deck_uri}, planner, log, s)
+
+
 def ask_deck(deck_id: str, instruction: str, planner=None, log=print, **kw) -> dict:
     """Let the router work out what is wanted. The general entry point.
 
-    Called by: cli.cmd_ask, cli.cmd_attach; tests/demo.py.
+    Called by: cli.cmd_ask; tests/demo.py.
     """
     return _invoke(deck_id, {"instruction": instruction, **kw}, planner, log)
 
@@ -231,10 +281,10 @@ def session(deck_id: str, planner=None, s: Settings | None = None) -> dict:
 
 
 def undo(deck_id: str, planner=None, s: Settings | None = None) -> dict:
-    """Go back one version.
+    """Go back one request: each version is the deck after one request (_keep_recent_versions).
 
-    This is why versions are appended and never overwritten: undo is dropping the last entry,
-    and the file it pointed at is still in the bucket if anyone wants it back.
+    Versions are appended and never overwritten, so undo is dropping the last entry, and the
+    file it pointed at is still in the bucket if anyone wants it back.
 
     Called by: cli.cmd_undo; tests/demo.py.
     """

@@ -86,6 +86,65 @@ def brand_colours(prs) -> dict[str, str]:
     }
 
 
+#: The extra hues of the extended palette, and what each is for in a spec ("tone": "teal").
+EXTRA_HUES = {"teal": 176, "blue": 208, "amber": 38, "plum": 312}
+
+
+def _from_hsl(h: float, l: float, s: float) -> str:
+    r, g, b = colorsys.hls_to_rgb((h % 360) / 360, max(0.0, min(1.0, l)), max(0.0, min(1.0, s)))
+    return "".join(f"{round(v * 255):02X}" for v in (r, g, b))
+
+
+def extended_palette(colours: dict) -> dict:
+    """More colour that still belongs to the brand: four extra hues at the brand's own depth.
+
+    The brand colours set the depth: the new hues take the average lightness of the primary and
+    the accent, and a saturation a little above theirs (muted brands stay muted, just less
+    monotone). Amber is the exception - a status colour has to read as amber - so it gets the
+    saturation it needs. Each new colour comes with a light tint for panels and fills.
+    Called by: with_palette.
+    """
+    _, lp, sp = _hsl(colours["primary"])
+    _, la, sa = _hsl(colours["accent"])
+    light = min(0.5, max(0.38, (lp + la) / 2))
+    sat = min(0.62, max(0.42, (sp + sa) / 2 + 0.12))
+    out = {}
+    for name, hue in EXTRA_HUES.items():
+        out[name] = _from_hsl(hue, 0.5 if name == "amber" else light, 0.78 if name == "amber" else sat)
+        out[f"{name}_light"] = _mix(out[name], "FFFFFF", 0.82)
+    return out
+
+
+def with_palette(P: dict, palette: str | None) -> dict:
+    """The profile in one of its two palettes. "brand" (the default): the template's own colours
+    only. "extended": the brand plus teal, blue, amber and plum, and the pieces' filled styles.
+
+    Called by: design.nodes (create), revise.nodes (edit), design.plan.
+    """
+    if palette != "extended":
+        return {**P, "palette": "brand"}
+    return {**P, "palette": "extended", "colours": {**P["colours"], **extended_palette(P["colours"])}}
+
+
+_MORE_COLOUR = re.compile(r"\b(more colou?r\w*|colou?rful|bolder|vibrant|bright\w*|"
+                          r"(bet+e?r|betrer|bettr|richer|nicer|stronger|more) colou?rs?|"
+                          r"extend\w* (the )?colou?r\w*|colou?r palette|more pop)\b", re.I)
+_BRAND_ONLY = re.compile(r"\b(template'?s? colou?rs|brand colou?rs only|less colou?r\w*|plain(er)? colou?rs?|"
+                         r"back to the (template|brand)\w*)\b", re.I)
+
+
+def palette_asked(request: str, current: str | None = None) -> str:
+    """Which palette a request asks for: "extended" for more colour, "brand" to go back to the
+    template's own colours, otherwise whatever the deck already uses (default "brand").
+    Called by: design.nodes.storyline, revise.nodes.split.
+    """
+    if _BRAND_ONLY.search(request or ""):
+        return "brand"
+    if _MORE_COLOUR.search(request or ""):
+        return "extended"
+    return current or "brand"
+
+
 def _content_layout(prs):
     """The layout most of the template's slides are built on, if it has a title box."""
     used = Counter(s.slide_layout.name for s in prs.slides)
@@ -153,5 +212,6 @@ def extract_profile(template: str | Path) -> dict:
         "area": [round(tx, 3), round(ty + th + 0.08, 3), round(W - 2 * tx, 3),
                  round(floor - 0.14 - (ty + th + 0.08), 3)],
         "font": font, "body_pt": body_pt, "small_pt": small_pt,
+        "title_rule": True,                  # a thin accent line under every content slide's title
         "colours": brand_colours(prs),
     }

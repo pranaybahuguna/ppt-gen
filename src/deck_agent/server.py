@@ -601,7 +601,7 @@ async def rest_action(request: Request) -> Response:
         uri = upload(*files["file"][0])
         text = str(fields.get("instruction") or "what can you do with this deck?")
         req = {"file": uri, "instruction": text}
-        fn = lambda log: facade.ask_deck(deck_id, text, log=log, attachments=[uri], source_deck=uri)
+        fn = lambda log: facade.attach_deck(deck_id, uri, text, log=log)
     else:
         raise LookupError(f"unknown action {action!r}: edit, translate, ask, answer, attach, undo")
     return _job_response(await _run_job(action, deck_id, req,

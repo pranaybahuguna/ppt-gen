@@ -211,3 +211,44 @@ def test_line_arrowheads():
     tags = [el.tag for el in ln if el.tag in (qn("a:headEnd"), qn("a:tailEnd"))]
     assert tags == [qn("a:headEnd"), qn("a:tailEnd")]
     assert line(slide, 0, 0, 1, 1, "000000").line._get_or_add_ln().find(qn("a:tailEnd")) is None
+# --------------------------------------------------------------------------- the extended palette
+
+def test_more_colour_is_asked_for_in_plain_words_and_typos():
+    from deck_agent.design.profile import palette_asked
+
+    assert palette_asked("can we add a bit more oomph, betrer colours and professionalism") == "extended"
+    assert palette_asked("use a more colourful palette") == "extended"
+    assert palette_asked("go back to the template colours", "extended") == "brand"
+    assert palette_asked("make slide 3 shorter", "extended") == "extended", "the deck keeps its palette"
+    assert palette_asked("make slide 3 shorter") == "brand"
+
+
+def test_the_extended_palette_adds_hues_and_tints_but_keeps_the_brand(template):
+    from deck_agent.design.profile import with_palette
+    from deck_agent.design.spec import tone_names
+
+    P = extract_profile(template)
+    E = with_palette(P, "extended")
+    assert E["palette"] == "extended" and with_palette(P, None)["palette"] == "brand"
+    for name in ("teal", "blue", "amber", "plum"):
+        assert len(E["colours"][name]) == 6 and len(E["colours"][f"{name}_light"]) == 6
+        assert name in tone_names(E) and name not in tone_names(P)
+    assert E["colours"]["primary"] == P["colours"]["primary"] and E["colours"]["accent"] == P["colours"]["accent"]
+
+
+def test_kpi_tiles_are_filled_and_coloured_in_the_extended_palette(template, tmp_path):
+    from deck_agent.design.profile import with_palette
+
+    P = with_palette(extract_profile(template), "extended")
+    spec = {"title": "Four numbers in four colours tell the story", "rows": [{"items": [
+        {"span": 12, "piece": "kpis", "items": [{"value": str(v), "label": "a label"} for v in (1, 2, 3, 4)]}]}]}
+    render_deck(template, [spec], tmp_path / "k.pptx", P)
+    slide = Presentation(str(tmp_path / "k.pptx")).slides[0]
+    fills = set()
+    for sh in slide.shapes:
+        try:
+            if sh.fill.type == 1 and sh.width > 914400 and sh.height > 914400 * 0.5:
+                fills.add(str(sh.fill.fore_color.rgb))
+        except (AttributeError, TypeError):
+            pass
+    assert len(fills) >= 3, f"the tiles should be filled with different colours, got {fills}"

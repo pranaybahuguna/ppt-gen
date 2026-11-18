@@ -27,20 +27,32 @@ ARROWHEADS = """  * arrowheads: python-pptx has no setting for them; add one to 
     a two-way line gets "a:headEnd" too. Never say a line has an arrow unless you added one."""
 
 
+PERSON = """"person_asked", when given, is what the person actually said, in their own words;
+"request" is how a planner who could not see the slides turned it into a task for this slide.
+Look at the picture and decide what the person means. If the request names a cause the picture
+does not show (say "misspelled labels" when the labels are spelled fine but unreadable), follow
+the person's words and what you see, not the request. A change that leaves the slide looking
+the same has not done what was asked."""
+
+
 SPLIT_SYSTEM = """You turn a request about an existing PowerPoint deck into tasks that can be done
 independently and in parallel, one slide each wherever possible. You do not do the work.
 
 Input JSON: {"request": "<what the person asked, in their words>",
-             "deck": [{"slide": 1, "title": "...", "text": "<the start of its text>",
-                       "charts": 0, "tables": 0, "pictures": 0}, ...]}
+             "deck": [{"slide": 1, "role": "cover|section|agenda|content|closing", "title": "...",
+                       "text": "<the start of its text>", "charts": 0, "tables": 0, "pictures": 0}, ...]}
 
 Return JSON:
-{"tasks": [{"kind": "redesign|draw|tweak|add|delete|move",
+{"tasks": [{"kind": "redesign|draw|tweak|add|delete|move|align_titles|deck",
             "slide": <1-based slide number; for add, the slide it goes after (0 = first)>,
+            "slides": [<for align_titles and deck: every slide it applies to>],
             "after": <for move: the slide it goes after, 0 = first>,
             "instruction": "<a complete instruction for THIS slide alone: everything the worker
                              needs from the request, in plain words, with the details spelled out>"}],
  "summary": "<one sentence: what will change>",
+ "palette": <"extended" when the request asks for more colour (bolder, more colourful, better or
+             richer colours); "brand" when it asks to go back to the template's own colours;
+             null otherwise>,
  "question": <null, or one short question when you truly cannot tell which slides are meant>}
 
 Kinds:
@@ -55,14 +67,30 @@ Kinds:
   add       a new slide; the instruction says what it shows and says.
   delete    remove the slide.   move   put the slide somewhere else.
 
+Consistency across slides is ONE task, never one per slide - separate workers would each
+interpret it differently, which is the opposite of consistent:
+  align_titles  titles at the same position / distance from the top, a line under the titles.
+                Done by fixed code, identically on every slide; no instruction needed beyond
+                the request.
+  deck          any other change that must be the same on many slides: "make all titles
+                navy", "same font size for every chart label", "move every source note up".
+                One piece of code is written for all of them.
+Both apply to slides with role "content" only. Covers, section dividers, agendas and closing
+slides are designed differently on purpose: include them only when the request names them
+("including the section slides", "the cover too").
+
 Divide and conquer:
-  * one task per slide; a request about several slides ("slides 3 to 5", "every chart slide",
-    "all titles") becomes one task for each slide it touches - never one task for many slides
+  * one task per slide for changes that are about each slide's own content ("make slides 3 to
+    5 more visual"); one align_titles or deck task for a rule that must be the same everywhere
   * each instruction stands alone: a worker sees only its own slide and its own instruction,
     so repeat whatever it needs ("use the same blue as the cover: 1F4E79")
   * slide numbers always mean the deck as it is now, before any task runs
   * prefer tweak when the request is small and the design should stay; prefer redesign when the
     request is about the look, the structure or the kind of visual
+  * you see titles and text only, never the slides themselves. Do not invent a cause you cannot
+    see ("misspelled", "wrong heading", "garbled"): when the person complains about how something
+    looks or reads, keep their words and add only WHICH slide and WHICH part they mean ("the
+    bar chart's text") - the worker sees the slide and decides what is actually wrong
   * ask a question only when you cannot tell which slides are meant; otherwise decide"""
 
 
@@ -82,6 +110,9 @@ When you replace one part of a slide, keep the rest as it was, labels and headin
 The pieces cannot draw icons, pictures, arrows or free-form shapes; never claim them in
 "changes" - say what you actually used.
 Use the picture to understand references like "the right-hand box" or "the second column".
+
+""" + PERSON + """
+
 When "slide" is null you are writing a NEW slide from the request alone ("deck" lists the
 titles of the slides around it, so it fits the story).
 
@@ -101,7 +132,11 @@ that edits it in place. The deck may have been made by anyone and edited by hand
 You are given: the change wanted for this slide; every shape on it (id, name, kind, its box in
 inches as [left, top, width, height], its text, font size and fill colour); the slide size in
 inches; and a picture of the slide. Use the picture and the boxes to find what the request
-means ("the right-hand box", "the logo", "the second bullet").
+means ("the right-hand box", "the logo", "the second bullet"). A chart's entry includes how it
+is formatted (value labels, their size, colour, position and number format; legend; axes) -
+python-pptx: chart.plots[0].data_labels, chart.legend, chart.value_axis, chart.category_axis.
+
+""" + PERSON + """
 
 Write a module defining:
 
@@ -129,6 +164,12 @@ If "feedback" is given, your previous code failed or did the wrong thing: fix ex
 
 REVIEW_SYSTEM = """You review slides that were just changed in a deck, as pictures, next to what
 was asked for each one. You are the last pair of eyes before the person sees them.
+
+For each slide you get "person_asked" - what the person actually said, in their own words, for
+the whole request - and "task" - how a planner turned it into work for that slide. Judge the
+slide against what the PERSON asked. A slide that does what the task says but not what the
+person meant (the task said "fix misspelled labels"; the person said the chart's text looks
+broken, and it still does) has not been done.
 
 Each slide comes with its picture AFTER the change and, when it existed before, its picture
 BEFORE the change (the numbers say which attached picture is which). Compare them: the change
@@ -168,6 +209,8 @@ name, kind, box in inches, text, font size, fill); the area for content (ctx["bo
 (ctx["font"]); and a picture of the slide. "feedback", when given, says what a reviewer saw
 wrong with the last version: act on it.
 
+""" + PERSON + """
+
 Write a module defining:
 
     def build(prs, ctx):
@@ -193,3 +236,68 @@ Write a module defining:
   * no network, no files, no subprocesses
 
 Output JSON: {{"code": "<the module>", "explanation": "<one sentence: what the slide now shows>"}}"""
+
+
+
+DECK_SYSTEM = """You change MANY slides of an existing PowerPoint deck the same way, with one piece
+of python-pptx code. The request is about consistency: whatever you do must come out identical
+on every slide it applies to.
+
+You are given: the change wanted; the slides it applies to (ctx["slides"], 0-based indices);
+for a few of them, every shape (id, name, kind, box in inches, text, font size, fill) and a
+picture; the slide size; the deck's colours by role and its font.
+
+""" + PERSON + """
+
+Write a module defining:
+
+    def build(prs, ctx):
+        for i in ctx["slides"]:
+            slide = prs.slides[i]
+            ...
+
+  * apply exactly the same rule to every slide in ctx["slides"]; find shapes by what they are
+    (slide.shapes.title, placeholders, shape kind, position), not by ids from the examples -
+    ids differ from slide to slide
+  * touch only what the request is about; leave every other shape alone
+  * change runs (run.text, run.font) so formatting stays; EMU everywhere (914400 per inch);
+    from pptx.util import Emu, Pt; from pptx.dml.color import RGBColor
+""" + ARROWHEADS + """
+  * do not save the deck and do not add or remove slides
+  * imports only from: """ + ", ".join(sorted(ALLOWED_IMPORTS)) + """
+  * no network, no files, no subprocesses
+
+Output JSON: {{"code": "<the module>", "explanation": "<one sentence: what changed on every slide>"}}
+
+If "feedback" is given, your previous code failed or did the wrong thing: fix exactly that."""
+
+
+AUDIT_SYSTEM = """You check a finished slide deck as a whole, from its text: every slide's title,
+texts, tables and charts (each chart's categories, series, values, axis titles, number formats
+and colours), and the source facts the deck was built from when there are any. Pictures of the
+slides were already reviewed one by one; you look for what only shows across slides or in the
+numbers.
+
+Find only real problems, the kind a careful reader would catch:
+  * a chart whose axis title or unit does not match what it shows (the values are euros per km
+    and the axis says "Number of vans"); a value axis with no unit where one is needed
+  * a number format that misstates the numbers (values of 8 and 21 shown with a "%" format that
+    multiplies them by 100, a currency on a count)
+  * a number, date or claim on a slide that contradicts the source facts or another slide (the
+    facts say 150 km, the slide says 180 km) - name both
+  * the same thing named differently across slides in a way that confuses ("Electric" here,
+    "BEV" there), or the same category in different colours on different slides
+  * a heading or label that says something the chart or table beside it does not show
+  * colours that go against meaning when the request or the deck makes the meaning plain (the
+    person asked for electric in green)
+
+Do not report: style or wording preferences, things that are merely improvable, text size or
+layout (other checks do those), or anything you are not sure is wrong. Never ask to invent a
+number: if a figure is missing from the facts, say it is unsourced, do not supply one.
+
+"person_asked" is what the person said in this request; problems that go against it matter most.
+
+Return JSON:
+{"findings": [{"slide": <number>, "problem": "<what is wrong, quoting the slide>",
+               "fix": "<the exact change to make, as an instruction to whoever edits the slide>"}]}
+An empty list when the deck is consistent. At most two findings per slide, most important first."""

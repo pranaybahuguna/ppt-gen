@@ -107,6 +107,9 @@ def build_graph(planner=None, log=print) -> StateGraph:
     g.add_node("work", partial(revise.work, planner=planner, log=log))
     g.add_node("join", partial(revise.join, log=log))
     g.add_node("review", partial(revise.review, planner=planner, log=log))
+    # then the whole deck once more, across slides: code fixes, one model check of the numbers;
+    # what it finds goes back through `work` like review's notes do.
+    g.add_node("audit", partial(revise.audit, planner=planner, log=log))
 
     # translate: unchanged - the text is replaced in place, every shape stays
     g.add_node("translate_plan", partial(nodes.translate_plan, planner=planner, log=log))
@@ -134,8 +137,9 @@ def build_graph(planner=None, log=print) -> StateGraph:
     g.add_conditional_edges("split", revise.after_split, ["work", "join", "ask", "decline"])
     g.add_edge("work", "join")
     g.add_edge("join", "review")
-    # review may send weak slides back to work once (Send again), or deliver.
-    g.add_conditional_edges("review", revise.after_review, ["work", "deliver"])
+    # review may send weak slides back to work (Send again), or pass the deck to the check.
+    g.add_conditional_edges("review", revise.after_review, ["work", "audit"])
+    g.add_conditional_edges("audit", revise.after_audit, ["work", "deliver"])
 
     g.add_conditional_edges("translate_plan", after_translate_plan,
                             ["translate_apply", "ask", "decline"])

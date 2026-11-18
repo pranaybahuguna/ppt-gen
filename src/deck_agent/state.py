@@ -55,10 +55,10 @@ def accumulate(old: list, new):
         return []
     return (old or []) + (new or [])
 
-Route = Literal["create", "edit", "translate", "restyle", "custom", "ask"]
+Route = Literal["create", "edit", "translate", "custom", "ask"]
 
-#: Routes the graph can actually carry out today. `restyle` is recognised and declined with a
-#: straight answer rather than silently doing something else (deckops backlog item 11).
+#: Routes the graph can carry out. Restyling ("restyle", "rebrand") is an edit: the slides are
+#: redesigned in the template the deck already uses.
 SUPPORTED: set[str] = {"create", "edit", "translate", "custom"}
 
 
@@ -93,7 +93,9 @@ class DeckState(TypedDict, total=False):
     source_deck: str | None         # the deck the person brought in, untouched
     template: str | None            # the template whose look we are matching
     template_id: str | None         # content hash of the template
-    deck_versions: list[str]        # every version, oldest first. The last one is current.
+    deck_versions: list[str]        # one version per request, oldest first. The last one is current.
+    turn_base: int                  # how many versions there were when this request began
+    palette: str | None             # "brand" or "extended" (more colour, asked for); kept per deck
     work_base: str | None           # the version this route started from. Ops carry fingerprints
                                     # taken from it, so every attempt re-applies to *this* file,
                                     # never to the output of a previous attempt.
@@ -113,6 +115,7 @@ class DeckState(TypedDict, total=False):
     edit_round: int                 # 0 = first pass; 1 = the pass after review
     changed: list[dict]             # [{task, kind, instruction, slide}] slide = its position now
     revise: list[dict]              # review's second-pass tasks with their feedback
+    audited: bool                   # the deck check's model pass has run this request
     extra_ops: list[dict]           # deterministic repair ops added on top of a compiled plan
                                     # (the font-size fallback), kept apart so the plan stays the
                                     # model's answer and the fallback stays ours
@@ -173,7 +176,7 @@ def turn_reset(instruction: str, run_id: str, turn: int, **kw) -> dict:
         "plan": None, "work_base": None,
         "edit_tasks": None, "edit_summary": None, "task_results": CLEAR, "edit_round": 0,
         "slide_specs": CLEAR, "deck_frame": None,
-        "changed": [], "revise": [],
+        "changed": [], "revise": [], "audited": False,
         "findings": [], "structural": [], "leaked": [], "previews": [], "vision_notes": [],
         "repair_round": 0, "extra_ops": [], "changelog": [], "pending_question": None, "answer": None,
         "delivered": None, "slide_scope": None, "target_lang": None,

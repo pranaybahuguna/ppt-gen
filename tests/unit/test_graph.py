@@ -117,16 +117,19 @@ def test_a_vague_request_stops_and_asks_then_resumes(offline_settings, uploaded_
     assert resumed["route"] == "translate"
 
 
-def test_something_we_do_not_do_is_declined_with_a_reason(offline_settings, uploaded_template, planner):
+def test_something_we_cannot_do_is_declined_with_a_reason(offline_settings, uploaded_template, planner):
     deck_id = "test-decline"
     facade.create_deck(deck_id, "a deck", CONTENT, uploaded_template, planner=planner,
                        log=lambda *a, **k: None, outline=OUTLINE)
-    answer = facade.ask_deck(deck_id, "restyle this onto the new corporate template",
-                             planner=planner, log=lambda *a, **k: None)
+
+    class NamesSlide40(type(planner)):           # as a model would: the request named slide 40
+        def split_edit(self, payload):
+            return {"tasks": [{"kind": "delete", "slide": 40, "instruction": "delete slide 40"}]}
+
+    answer = facade.ask_deck(deck_id, "delete slide 40", planner=NamesSlide40(), log=lambda *a, **k: None)
     assert answer["ok"] is False
-    assert answer["route"] == "restyle"
-    assert "not supported yet" in answer["reason"]
-    assert "build a new deck" in answer["reason"], "a plain no should still offer the nearest thing"
+    assert answer["route"] == "decline"
+    assert "do not exist" in answer["reason"], "the reason says why, not just no"
 
 
 def test_create_with_no_template_asks_for_one(offline_settings, planner):
@@ -146,3 +149,43 @@ def test_every_run_leaves_a_manifest_that_explains_it(offline_settings, uploaded
     assert manifest["template"] and manifest["template_id"]
     assert [entry["node"] for entry in manifest["trace"]][:4] == ["intake", "route", "gather", "storyline"]
     assert manifest["settings"]["render_backend"] == "off"
+
+
+def test_a_requests_intermediate_versions_are_dropped_so_undo_goes_back_one_request(
+        offline_settings, uploaded_template, planner):
+    """An edit whose review sent it round again publishes two versions; only the last is kept,
+    so undo lands on the deck as it was before the request - not on its first pass."""
+    deck_id = "test-one-version-per-request"
+    quiet = lambda *a, **k: None
+    created = facade.create_deck(deck_id, "a deck", CONTENT, uploaded_template, planner=planner, log=quiet)
+    first_pass = store().put_bytes(b"pass", f"{deck_id}/v002.pptx")
+    final = store().put_bytes(b"final", f"{deck_id}/v003.pptx")
+    with facade.deck_graph(planner, quiet) as graph:     # as if a two-pass edit had just finished
+        graph.update_state(facade._config(deck_id),
+                           {"deck_versions": [created["deck"], first_pass, final], "turn_base": 1})
+    out = facade._keep_recent_versions(deck_id, {"deck": final}, offline_settings)
+    assert out["versions_deleted"] == 1
+    assert facade.session(deck_id, planner=planner)["versions"] == [created["deck"], final]
+    assert not store().exists(first_pass)
+    assert facade.undo(deck_id, planner=planner)["deck"] == created["deck"]
+
+
+def test_attaching_to_an_existing_deck_makes_the_file_the_deck(offline_settings, uploaded_template,
+                                                                sample_deck, planner):
+    """Attaching is how a hand-edited copy comes back: it becomes the newest version and the
+    instruction works on it; undo can still go back past it."""
+    from pptx import Presentation
+
+    deck_id = "test-attach-existing"
+    quiet = lambda *a, **k: None
+    created = facade.create_deck(deck_id, "a deck", CONTENT, uploaded_template, planner=planner, log=quiet)
+    attached_uri = store().put(sample_deck, "uploads/hand-edited.pptx")
+    result = facade.attach_deck(deck_id, attached_uri, "make slide 2 less wordy", planner=planner, log=quiet)
+    assert result["ok"], result
+    versions = facade.session(deck_id, planner=planner)["versions"]
+    assert len(versions) == 3 and versions[0] == created["deck"]
+    local = store().get(versions[-1], offline_settings.workspace_root / "after.pptx")
+    assert len(Presentation(str(local)).slides) == len(Presentation(str(sample_deck)).slides), \
+        "the edit ran on the attached deck, not the one the session had"
+    assert facade.undo(deck_id, planner=planner)["deck"] == versions[1]      # the attached file
+    assert facade.undo(deck_id, planner=planner)["deck"] == created["deck"]

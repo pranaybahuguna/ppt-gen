@@ -75,6 +75,11 @@ The slide is rows from top to bottom; a row is pieces side by side on a 12-colum
 Pieces:
 {catalog}
 
+Colour: "tones" lists the colour names you may give a "tone". With "palette": "extended" the
+deck has asked for more colour: KPI tiles and cards are drawn filled, side-by-side things take
+different colours, and you may use teal, blue, amber and plum as well as the brand's own - use
+them to tell things apart and to signal (amber = at risk, alert = bad), not at random.
+
 Rows: 1-3. `weight` shares the height between rows (a row of kpis over a chart: 0.8 and 1.4);
 a callout row always has "height": 0.75 and is last. Spans in a row add up to 12.
 

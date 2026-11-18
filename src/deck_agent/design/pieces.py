@@ -202,15 +202,20 @@ def kpis(slide, box: Box, d: dict, P: dict) -> list[str]:
     if lpt is None:
         problems.append("kpis: a label is too long; keep labels to a few words")
         lpt = P["small_pt"]
-    for card, item in zip(cards, items):
-        tone = colour(P, item.get("tone"), "primary")
-        rect(slide, card, P["colours"]["card"], P["colours"]["line"])
-        rect(slide, Box(card.x, card.y, card.w, bar), tone)
+    for k, (card, item) in enumerate(zip(cards, items)):
+        tone = colour(P, item.get("tone"), "primary") if item.get("tone") else _cycle(P, k)
+        if filled(P):                      # a solid tile in its colour, the number in white
+            rect(slide, card, tone)
+            value_colour, label_colour = "FFFFFF", "FFFFFF"
+        else:
+            rect(slide, card, P["colours"]["card"], P["colours"]["line"])
+            rect(slide, Box(card.x, card.y, card.w, bar), tone)
+            value_colour, label_colour = tone, P["colours"]["muted"]
         inner = card.inset(pad)
         v = Box(inner.x, card.y + bar + pad, inner.w, value_h)
-        text(slide, v, item["value"], vpt, tone, P, bold=True, align="center", anchor="bottom")
+        text(slide, v, item["value"], vpt, value_colour, P, bold=True, align="center", anchor="bottom")
         lab = Box(inner.x, v.bottom + 0.08, inner.w, label_h)
-        text(slide, lab, item.get("label", ""), lpt, P["colours"]["muted"], P,
+        text(slide, lab, item.get("label", ""), lpt, label_colour, P,
              align="center", anchor="top")
     return problems
 
@@ -379,7 +384,7 @@ def steps(slide, box: Box, d: dict, P: dict) -> list[str]:
              P["colours"]["line"], 2.0, arrow="end")
     for k, (col, item) in enumerate(zip(cols, items)):
         last = d.get("last_is_outcome") and k == n - 1
-        tone = P["colours"]["accent"] if last else P["colours"]["primary"]
+        tone = P["colours"]["accent"] if last else _cycle(P, k)
         circ = rect(slide, Box(col.x + col.w / 2 - diam / 2, top_y, diam, diam), tone,
                     shape=MSO_SHAPE.OVAL)
         text(slide, None, str(k + 1), P["body_pt"] + 4, "FFFFFF", P, bold=True, align="center",
@@ -431,10 +436,23 @@ def footnote(slide, box: Box, d: dict, P: dict) -> list[str]:
     return []
 
 
+def filled(P: dict) -> bool:
+    """Whether the deck uses the extended palette's filled, more colourful styles."""
+    return P.get("palette") == "extended"
+
+
 def _tones(P: dict) -> list[str]:
-    """The colours a set of side-by-side things takes, in order."""
+    """The colours a set of side-by-side things takes, in order. With the extended palette, the
+    brand's two colours lead and the derived hues follow."""
     c = P["colours"]
+    if filled(P):
+        return [c["primary"], c["teal"], c["accent"], c["blue"], c["plum"], c["amber"]]
     return [c["primary"], c["accent"], c["primary_dark"], c["accent_dark"]]
+
+
+def _cycle(P: dict, k: int, default: str = "primary") -> str:
+    """The k-th thing's colour: one colour for all in the brand palette, a cycle in the extended."""
+    return _tones(P)[k % len(_tones(P))] if filled(P) else P["colours"][default]
 
 
 def _light(P: dict, tone: str) -> str:
@@ -444,6 +462,9 @@ def _light(P: dict, tone: str) -> str:
         return c["accent_light"]
     if tone in (c["primary"], c["primary_dark"]):
         return c["primary_light"]
+    for name, value in c.items():
+        if value == tone and f"{name}_light" in c:
+            return c[f"{name}_light"]
     return c["panel"]
 
 
@@ -500,7 +521,8 @@ def points(slide, box: Box, d: dict, P: dict) -> list[str]:
             text(slide, None, str(k + 1), P["body_pt"] + 1, "FFFFFF", P, bold=True,
                  align="center", anchor="middle", shape=circ)
         else:
-            rect(slide, Box(box.x, y + 0.04, 0.09, max(h - 0.08, 0.2)), tone)
+            rect(slide, Box(box.x, y + 0.04, 0.09, max(h - 0.08, 0.2)),
+                 _cycle(P, k) if filled(P) and not d.get("tone") else tone)
         x = box.x + mark_w
         yy = y
         if item.get("heading"):
@@ -557,9 +579,14 @@ def cards(slide, box: Box, d: dict, P: dict) -> list[str]:
         in_row = min(ncols, n - r * ncols)
         x0 = box.x + (box.w - (in_row * cw + (in_row - 1) * gap)) / 2
         card = Box(x0 + c * (cw + gap), top + r * (card_h + gap), cw, card_h)
-        tone = colour(P, item.get("tone"), "primary") if item.get("tone") else tones[0]
-        rect(slide, card, P["colours"]["card"], P["colours"]["line"])
-        rect(slide, Box(card.x, card.y, card.w, bar), tone)
+        tone = colour(P, item.get("tone"), "primary") if item.get("tone") else (
+            _cycle(P, k) if filled(P) else tones[0])
+        if filled(P):                      # a tinted card under a heavier bar in its colour
+            rect(slide, card, _light(P, tone))
+            rect(slide, Box(card.x, card.y, card.w, bar + 0.04), tone)
+        else:
+            rect(slide, card, P["colours"]["card"], P["colours"]["line"])
+            rect(slide, Box(card.x, card.y, card.w, bar), tone)
         y = card.y + bar + pad
         if has_val and item.get("value"):
             text(slide, Box(card.x + pad, y, iw, val_h), item["value"], vpt, tone, P, bold=True)
@@ -657,7 +684,7 @@ def timeline(slide, box: Box, d: dict, P: dict) -> list[str]:
     line(slide, x0, line_y, x1, line_y, P["colours"]["line"], 2.0, arrow="end")   # time runs on
     for k, (col, item) in enumerate(zip(cols, items)):
         last = d.get("last_is_outcome") and k == n - 1
-        tone = P["colours"]["accent"] if last else P["colours"]["primary"]
+        tone = P["colours"]["accent"] if last else _cycle(P, k)
         text(slide, Box(col.x, top, iw, when_h + 0.02), item["when"], wpt, tone, P, bold=True)
         rect(slide, Box(col.x, line_y - 0.13, 0.26, 0.26), tone, shape=MSO_SHAPE.OVAL)
         y = line_y + 0.35
@@ -729,7 +756,8 @@ def table(slide, box: Box, d: dict, P: dict) -> list[str]:
             elif hl is not None and r - 1 == hl:
                 fill, fg, bold = P["colours"]["accent_light"], P["colours"]["text"], True
             else:
-                fill, fg, bold = ("FFFFFF" if r % 2 else P["colours"]["panel"]), P["colours"]["text"], c == 0
+                band = P["colours"]["primary_light"] if filled(P) else P["colours"]["panel"]
+                fill, fg, bold = ("FFFFFF" if r % 2 else band), P["colours"]["text"], c == 0
             cell.fill.fore_color.rgb = _rgb(fill)
             tf = cell.text_frame
             tf.word_wrap = True
