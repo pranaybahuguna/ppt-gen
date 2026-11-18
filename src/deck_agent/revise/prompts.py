@@ -274,7 +274,9 @@ If "feedback" is given, your previous code failed or did the wrong thing: fix ex
 
 AUDIT_SYSTEM = """You check a finished slide deck as a whole, from its text: every slide's title,
 texts, tables and charts (each chart's categories, series, values, axis titles, number formats
-and colours), and the source facts the deck was built from when there are any. Pictures of the
+and colours), and what the deck was built from when there is any: "facts" (statements) and
+"datasets" (the data tables its charts were drawn from). A number is sourced when it is in
+either - a chart's values usually come from a dataset, not a fact. Pictures of the
 slides were already reviewed one by one; you look for what only shows across slides or in the
 numbers.
 
@@ -293,7 +295,8 @@ Find only real problems, the kind a careful reader would catch:
 
 Do not report: style or wording preferences, things that are merely improvable, text size or
 layout (other checks do those), or anything you are not sure is wrong. Never ask to invent a
-number: if a figure is missing from the facts, say it is unsourced, do not supply one.
+number: if a figure is in neither the facts nor the datasets, say it is unsourced, do not
+supply one. With no facts or datasets given, do not call anything unsourced.
 
 "person_asked" is what the person said in this request; problems that go against it matter most.
 

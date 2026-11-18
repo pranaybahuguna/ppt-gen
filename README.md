@@ -399,17 +399,19 @@ numbers. In: the whole current deck, its slide roles, its palette, its facts and
     800%) gets a literal % sign;
   * chart colours, decided once for the deck: the same thing is the same colour on every slide
     ("Electric" and "Electricity" are one thing), things in one chart are clearly different
-    colours, and every colour is on the palette (the brand's and its extended hues; greys stay);
+    colours, and every colour is on the palette (the brand's and its extended hues, as the
+    template and the deck both read it; greys stay);
   * every content slide's title at the size most of them use, where it still fits two lines.
 * Found by plain code: text smaller than anything the template itself uses.
 * Found by **one text-only model call** (once per request): every slide's text, tables and charts
-  (categories, series, values, axis titles, number formats, colours) next to the facts - a unit
-  or axis title that does not match the data, a number that contradicts the facts or another
-  slide, the same thing named two ways.
+  (categories, series, values, axis titles, number formats, colours) next to the facts and the
+  datasets the charts were drawn from - a unit or axis title that does not match the data, a
+  number that contradicts the sources or another slide, the same thing named two ways.
 
 If code fixed anything, a new version is published. Each slide with findings goes back to `work`
-as a `tweak`, **once per request**, while revision rounds are left; then review looks at it again.
-The rest are warnings (`audit: slide N: ...`). Switch it off with `audit_deck`.
+as a `tweak`, **once per request** - a round of its own, whatever review's rounds used up; then
+review looks at it again. The rest are warnings (`audit: slide N: ...`). Switch it off with
+`audit_deck`.
 
 **12. `deliver`** - writes `run/manifest.json` (route and why, versions, tasks, every warning,
 the full trace, the settings that mattered) and returns:

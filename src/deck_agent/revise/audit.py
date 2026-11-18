@@ -88,14 +88,19 @@ TOO_CLOSE = 90            # two chart colours closer than this are hard to tell 
 _ORDER = ("primary", "accent", "teal", "blue", "amber", "plum", "primary_dark", "accent_dark", "alert")
 
 
-def chart_palette(P: dict) -> list[str]:
+def chart_palette(P: dict, *more: dict) -> list[str]:
     """The colours a chart may use, in the order to hand them out: the brand's, then the
-    extended hues (which are made from the brand's own depth, so they still belong to it)."""
-    c = with_palette(P, "extended")["colours"]
+    extended hues (which are made from the brand's own depth, so they still belong to it).
+
+    `more` are other readings of the same brand: the slides were drawn with the template's
+    colours, while counting colours on the finished deck can name another one (its navy section
+    panels outnumber everything) - a colour either reading calls the brand's is the brand's."""
     out = []
-    for k in _ORDER:
-        if c.get(k) and c[k].upper() not in out:
-            out.append(c[k].upper())
+    for prof in (P, *more):
+        c = with_palette(prof, "extended")["colours"]
+        for k in _ORDER:
+            if c.get(k) and c[k].upper() not in out:
+                out.append(c[k].upper())
     return out
 
 
@@ -168,7 +173,7 @@ def _holders(sh) -> list[dict]:
     return out
 
 
-def fix_chart_colours(prs, slides: list[int], P: dict) -> list[str]:
+def fix_chart_colours(prs, slides: list[int], P: dict, *more: dict) -> list[str]:
     """Chart colours, decided once for the whole deck:
 
     * the same thing (by name) is the same colour on every slide;
@@ -176,9 +181,10 @@ def fix_chart_colours(prs, slides: list[int], P: dict) -> list[str]:
     * colours come from the deck's palette (brand plus its extended hues); greys stay grey.
 
     Each name keeps the colour it has most often when that is allowed; otherwise it gets the
-    nearest palette colour no neighbour of it is using. -> what changed
+    nearest palette colour no neighbour of it is using. `more`: other profiles of the same brand
+    (see chart_palette). -> what changed
     """
-    palette = chart_palette(P)
+    palette = chart_palette(P, *more)
     found = []                                         # (slide, [holders]) per chart
     for n, sh in charts(prs, slides):
         hs = [h for h in _holders(sh) if not _neutral(h["colour"])]
@@ -338,8 +344,9 @@ def inventory(prs, roles: dict[int, str]) -> list[dict]:
     return out
 
 
-def fix_deck(prs, P: dict, content: list[int], every: list[int]) -> list[str]:
+def fix_deck(prs, P: dict, content: list[int], every: list[int], *more: dict) -> list[str]:
     """All the plain-code fixes, in place. `content` are the content slides (titles), `every` all
-    slides (charts may sit on any). -> one line per change"""
-    return (fix_percent_formats(prs, every) + fix_chart_colours(prs, every, P)
+    slides (charts may sit on any); `more` other profiles of the same brand (the template's).
+    -> one line per change"""
+    return (fix_percent_formats(prs, every) + fix_chart_colours(prs, every, P, *more)
             + fix_title_sizes(prs, content, P))

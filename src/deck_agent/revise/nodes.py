@@ -430,16 +430,25 @@ def after_review(state: DeckState):
 
 # --------------------------------------------------------------------------- audit
 
-def _facts(state: DeckState, limit: int = 20000) -> list:
-    """The source facts the deck was built from, as many as fit `limit` characters."""
+def _sources(state: DeckState, limit: int = 30000) -> dict:
+    """What the deck was built from: its facts and its datasets (the tables its charts were drawn
+    from), as much as fits `limit` characters. Without the datasets a chart's own numbers look
+    unsourced. -> {"facts": [...], "datasets": {...}}"""
     import json
 
-    out, size = [], 0
-    for f in (state.get("content_pack") or {}).get("facts") or []:
+    pack = state.get("content_pack") or {}
+    out: dict = {"facts": [], "datasets": {}}
+    size = 0
+    for name, data in (pack.get("datasets") or {}).items():
+        size += len(json.dumps(data, ensure_ascii=False))
+        if size > limit // 2:
+            break
+        out["datasets"][name] = data
+    for f in pack.get("facts") or []:
         size += len(json.dumps(f, ensure_ascii=False))
         if size > limit:
             break
-        out.append(f)
+        out["facts"].append(f)
     return out
 
 
@@ -449,8 +458,8 @@ def audit(state: DeckState, planner=None, log=print) -> dict:
     Plain code fixes what has one right answer (revise.audit.fix_deck: percent formats, chart
     colours, title sizes) and publishes the result. Plain code and - once per request - one
     text-only model call find the rest (small text; units, axis titles, numbers against the
-    facts). Each slide with findings goes back through `work` as a tweak, once per request,
-    while revision rounds are left; otherwise the findings are warnings.
+    facts and datasets). Each slide with findings goes back through `work` as a tweak, once per
+    request - a round of its own, not one of review's; what is left is a warning.
 
     Reads: deck_versions, palette, content_pack, instruction, edit_round, edit_tasks, audited.
     Writes: deck_versions (+1 when it fixed something), changelog, previews, vision_notes;
@@ -476,15 +485,18 @@ def audit(state: DeckState, planner=None, log=print) -> dict:
     with workspace(state) as ws:
         deck = ws.fetch(uri, f"audit-r{rnd}.pptx")
         P = with_palette(extract_profile(deck), state.get("palette"))
+        # The slides were drawn with the template's colours: those are the brand's too.
+        brand = [extract_profile(ws.fetch(state["template"], "audit-template.pptx"))] \
+            if state.get("template") else []
         prs = Presentation(str(deck))
         roles = {o["slide"]: o["role"] for o in deck_outline(prs)}
         content = [n for n, r in roles.items() if r == "content"]
-        fixed = A.fix_deck(prs, P, content, list(roles))
+        fixed = A.fix_deck(prs, P, content, list(roles), *brand)
         found = A.text_findings(prs, content, P)
         if model_pass:
             try:
                 answer = planner.audit_deck({"person_asked": state.get("instruction") or "",
-                                             "slides": A.inventory(prs, roles), "facts": _facts(state)})
+                                             "slides": A.inventory(prs, roles), **_sources(state)})
             except Exception as e:            # a check that could not run is a warning, not a failure
                 answer = {}
                 notes.append(f"audit: the deck check's model call failed ({str(e)[:120]})")
@@ -512,12 +524,13 @@ def audit(state: DeckState, planner=None, log=print) -> dict:
                         "changelog": (state.get("changelog") or [])
                         + [{"slide": None, "change": f"deck check: {line}"} for line in fixed]})
             log(f"  audit: fixed {len(fixed)} thing(s) by code -> {new_uri}")
-    # Each slide goes back once per request: a second miss is reported, not chased.
+    # Each slide goes back once per request - its own round, whatever review's rounds used: a
+    # second miss is reported, not chased.
     tasks = state.get("edit_tasks") or []
     sent = {t["slide"] for t in tasks if str(t.get("id", "")).startswith("a")}
     back, report = [], []
     for n, problems in sorted(found.items()):
-        if rnd < s.revision_rounds and n not in sent:
+        if n not in sent:
             back.append({"id": f"a{n}", "kind": "tweak", "slide": n, "round": rnd + 1, "was": None,
                          "instruction": "The deck check found this on the slide; fix it: " + "; ".join(problems),
                          "person_asked": state.get("instruction") or ""})

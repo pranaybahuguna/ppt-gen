@@ -134,6 +134,7 @@ def test_the_deck_check_runs_after_review_and_sends_its_findings_back_once(offli
     assert created["ok"], created
     assert len(planner.audits) == 1, "one model check per request"
     assert planner.audits[0]["facts"] == CONTENT["facts"]
+    assert planner.audits[0]["datasets"] == CONTENT["datasets"], "a chart's numbers come from the datasets"
     told = [t for t in planner.tweaks if t.get("slide_number") == 2]
     # one task (its worker may try up to three times), never a second one from a later check
     assert 1 <= len(told) <= 3 and all("Cost per km (EUR)" in t["request"] for t in told)
@@ -168,3 +169,30 @@ def test_a_bar_is_judged_by_its_fill_not_a_leftover_marker_colour(template, tmp_
     A.fix_chart_colours(prs, [3], P)
     after = [str(ch.plots[0].series[0].points[i].format.fill.fore_color.rgb) for i in (0, 1)]
     assert all(c in pal for c in after) and after[0] != after[1]
+
+
+def test_a_colour_the_template_calls_brand_is_not_recoloured(template, tmp_path):
+    """Slides are drawn with the template's colours; counting colours on the finished deck can
+    name a different primary. A chart in the template's own colour is on the palette."""
+    src = _deck(template, tmp_path)
+    P = extract_profile(src)
+    other = {**P, "colours": {**P["colours"], "primary": "525B88"}}    # the template's reading
+    prs = Presentation(str(src))
+    ch = _chart(prs.slides[2], {"Revenue": [1, 2, 3]}, ["525B88"])
+    assert A.fix_chart_colours(prs, [3], P) != [], "on the deck's reading alone it is off-palette"
+    prs = Presentation(str(src))
+    ch = _chart(prs.slides[2], {"Revenue": [1, 2, 3]}, ["525B88"])
+    assert A.fix_chart_colours(prs, [3], P, other) == []
+    assert str(ch.plots[0].series[0].format.fill.fore_color.rgb) == "525B88"
+
+
+def test_the_deck_check_sends_back_even_when_review_used_every_round(offline_settings, template):
+    """The check has a round of its own: review spending all of its rounds on one slide must not
+    turn the check's findings into warnings nobody acted on."""
+    offline_settings.revision_rounds = 0
+    uploaded = store().put(template, f"uploads/{sha256_file(template)}-template.pptx")
+    planner = _Auditor()
+    created = facade.create_deck("test-audit-own-round", "a deck", CONTENT, uploaded, planner=planner,
+                                 log=lambda *a, **k: None)
+    assert created["ok"], created
+    assert any("Cost per km (EUR)" in t["request"] for t in planner.tweaks)
