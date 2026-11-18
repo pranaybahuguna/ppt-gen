@@ -24,7 +24,8 @@ ARROWHEADS = """  * arrowheads: python-pptx has no setting for them; add one to 
         c.line.color.rgb = RGBColor.from_string("525B88"); c.line.width = Pt(2)
         ln = c.line._get_or_add_ln()
         ln.append(ln.makeelement(qn("a:tailEnd"), {{"type": "triangle", "w": "med", "len": "med"}}))
-    a two-way line gets "a:headEnd" too. Never say a line has an arrow unless you added one."""
+    a two-way line gets "a:headEnd" too. Never say a line has an arrow unless you added one.
+    Lines already on the slide list "arrow" (none/start/end/both): do not add a second head."""
 
 
 PERSON = """"person_asked", when given, is what the person actually said, in their own words;

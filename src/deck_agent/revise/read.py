@@ -16,6 +16,7 @@ from __future__ import annotations
 import re
 
 from pptx.enum.shapes import MSO_SHAPE_TYPE, PP_PLACEHOLDER
+from pptx.oxml.ns import qn
 
 EMU = 914400
 _SKIP_PH = {PP_PLACEHOLDER.SLIDE_NUMBER, PP_PLACEHOLDER.FOOTER, PP_PLACEHOLDER.DATE}
@@ -54,6 +55,20 @@ def _fill(sh) -> str | None:
     except Exception:
         pass
     return None
+
+
+def _line(sh) -> dict:
+    """A connector's ends (inches) and its arrowheads: "end" (at the to-point), "start", "both"
+    or "none". Arrowheads live in a:ln as a:tailEnd (end) / a:headEnd (start); type="none" or
+    no element means no head."""
+    def has(tag):
+        ln = sh._element.spPr.find(qn("a:ln"))
+        el = ln.find(qn(tag)) if ln is not None else None
+        return el is not None and el.get("type", "none") != "none"
+    start, end = has("a:headEnd"), has("a:tailEnd")
+    arrow = "both" if start and end else "end" if end else "start" if start else "none"
+    pt = lambda x, y: [round(x / EMU, 2), round(y / EMU, 2)]
+    return {"from_in": pt(sh.begin_x, sh.begin_y), "to_in": pt(sh.end_x, sh.end_y), "arrow": arrow}
 
 
 def _chart(sh) -> dict:
@@ -160,6 +175,8 @@ def slide_shapes(slide) -> list[dict]:
             e["chart"] = {**_chart(sh), "format": _chart_format(sh.chart)}
         if sh.has_table:
             e["table"] = [[c.text.strip()[:60] for c in row.cells] for row in sh.table.rows][:10]
+        if sh.shape_type == MSO_SHAPE_TYPE.LINE and hasattr(sh, "begin_x"):
+            e.update(_line(sh))
         fill = _fill(sh)
         if fill:
             e["fill"] = fill

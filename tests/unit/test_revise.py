@@ -231,3 +231,17 @@ def test_a_change_nobody_can_see_is_caught_by_code():
 
     assert barely_changed(png(), png()) is True
     assert barely_changed(png(), png(draw_more=True)) is False
+
+
+def test_slide_shapes_reports_arrowheads():
+    from pptx import Presentation
+    from deck_agent.design.pieces import line
+
+    prs = Presentation()
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    line(slide, 1, 1, 3, 1, "000000", arrow="end")
+    line(slide, 1, 2, 3, 2, "000000", arrow="both")
+    line(slide, 1, 3, 3, 3, "000000")
+    lines = [e for e in slide_shapes(slide) if "arrow" in e]
+    assert [e["arrow"] for e in lines] == ["end", "both", "none"]
+    assert lines[0]["from_in"] == [1.0, 1.0] and lines[0]["to_in"] == [3.0, 1.0]
