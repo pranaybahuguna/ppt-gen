@@ -22,6 +22,7 @@ from pptx.dml.color import RGBColor
 from pptx.enum.chart import XL_CHART_TYPE, XL_LABEL_POSITION, XL_LEGEND_POSITION, XL_TICK_MARK
 from pptx.enum.shapes import MSO_CONNECTOR, MSO_SHAPE
 from pptx.enum.text import MSO_ANCHOR, MSO_AUTO_SIZE, PP_ALIGN
+from pptx.oxml.ns import qn
 from pptx.util import Emu, Pt
 
 from . import measure
@@ -128,12 +129,37 @@ def text(slide, box: Box, value: str, pt: float, colour_hex: str, P: dict, bold:
     return shape
 
 
-def line(slide, x1: float, y1: float, x2: float, y2: float, colour_hex: str, pt: float = 1.0):
-    """A straight connector."""
+def arrowhead(connector, at: str = "end", size: str = "med") -> None:
+    """Put a triangle arrowhead on a line: at its "end" (x2, y2), its "start", or "both".
+
+    python-pptx has no setting for this; it is the a:tailEnd / a:headEnd element of the
+    line's a:ln. Calling it twice does not stack heads.
+    """
+    ln = connector.line._get_or_add_ln()
+    tags = {"end": ["a:tailEnd"], "start": ["a:headEnd"], "both": ["a:headEnd", "a:tailEnd"]}[at]
+    for tag in tags:
+        for old in ln.findall(qn(tag)):
+            ln.remove(old)
+        el = ln.makeelement(qn(tag), {"type": "triangle", "w": size, "len": size})
+        # schema order inside a:ln: fills, prstDash, join, headEnd, tailEnd, extLst
+        ext = ln.find(qn("a:extLst"))
+        if tag == "a:headEnd" and ln.find(qn("a:tailEnd")) is not None:
+            ln.find(qn("a:tailEnd")).addprevious(el)
+        elif ext is not None:
+            ext.addprevious(el)
+        else:
+            ln.append(el)
+
+
+def line(slide, x1: float, y1: float, x2: float, y2: float, colour_hex: str, pt: float = 1.0,
+         arrow: str | None = None):
+    """A straight connector from (x1, y1) to (x2, y2); arrow: None, "end", "start" or "both"."""
     c = slide.shapes.add_connector(MSO_CONNECTOR.STRAIGHT, Emu(int(x1 * EMU)), Emu(int(y1 * EMU)),
                                    Emu(int(x2 * EMU)), Emu(int(y2 * EMU)))
     c.line.color.rgb = _rgb(colour_hex)
     c.line.width = Pt(pt)
+    if arrow:
+        arrowhead(c, arrow)
     return c
 
 
@@ -346,8 +372,11 @@ def steps(slide, box: Box, d: dict, P: dict) -> list[str]:
         shift = (card_h - need) / 2
         top_y, card_top, card_h = top_y + shift, card_top + shift, need
     cy = top_y + diam / 2
-    line(slide, cols[0].x + cols[0].w / 2, cy, cols[-1].x + cols[-1].w / 2, cy,
-         P["colours"]["line"], 2.0)
+    # One arrow from each circle to the next, so the order reads as a flow.
+    gap = 0.08
+    for a, b in zip(cols, cols[1:]):
+        line(slide, a.x + a.w / 2 + diam / 2 + gap, cy, b.x + b.w / 2 - diam / 2 - gap, cy,
+             P["colours"]["line"], 2.0, arrow="end")
     for k, (col, item) in enumerate(zip(cols, items)):
         last = d.get("last_is_outcome") and k == n - 1
         tone = P["colours"]["accent"] if last else P["colours"]["primary"]
@@ -625,7 +654,7 @@ def timeline(slide, box: Box, d: dict, P: dict) -> list[str]:
     top = box.y + max(0.0, (box.h - total) / 2)               # centred in its cell
     line_y = top + when_h + 0.3
     x0, x1 = cols[0].x + 0.13, cols[-1].right
-    line(slide, x0, line_y, x1, line_y, P["colours"]["line"], 2.0)
+    line(slide, x0, line_y, x1, line_y, P["colours"]["line"], 2.0, arrow="end")   # time runs on
     for k, (col, item) in enumerate(zip(cols, items)):
         last = d.get("last_is_outcome") and k == n - 1
         tone = P["colours"]["accent"] if last else P["colours"]["primary"]

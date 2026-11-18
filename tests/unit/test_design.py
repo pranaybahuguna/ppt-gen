@@ -195,3 +195,19 @@ def test_dry_run_refuses_text_shrunk_below_reading_size(template):
     problems = dry_run(crowded, template, P)
     assert problems and ("shrink" in problems[0] or "does not fit" in problems[0])
     assert dry_run(SPIKE[0], template, P) == []
+
+
+def test_line_arrowheads():
+    from pptx import Presentation
+    from pptx.oxml.ns import qn
+    from deck_agent.design.pieces import arrowhead, line
+
+    prs = Presentation()
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    c = line(slide, 1, 1, 3, 1, "000000", 2.0, arrow="end")
+    ln = c.line._get_or_add_ln()
+    assert len(ln.findall(qn("a:tailEnd"))) == 1 and ln.find(qn("a:headEnd")) is None
+    arrowhead(c, "both")                      # no stacking; head comes before tail
+    tags = [el.tag for el in ln if el.tag in (qn("a:headEnd"), qn("a:tailEnd"))]
+    assert tags == [qn("a:headEnd"), qn("a:tailEnd")]
+    assert line(slide, 0, 0, 1, 1, "000000").line._get_or_add_ln().find(qn("a:tailEnd")) is None
