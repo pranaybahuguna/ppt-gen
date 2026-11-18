@@ -152,8 +152,8 @@ def _shrunk(slide, P: dict) -> list[str]:
     floor = P["body_pt"] - 1
     small = set()
     for sh in slide.shapes:
-        if not sh.has_text_frame or sh.is_placeholder:
-            continue
+        if not sh.has_text_frame or sh.is_placeholder or sh.name.startswith("deck-"):
+            continue                                 # the template's own header and footer
         for p in sh.text_frame.paragraphs:
             for r in p.runs:
                 if r.font.size and r.font.size.pt < floor and not r.font.italic and r.text.strip():

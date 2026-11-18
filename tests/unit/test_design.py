@@ -12,6 +12,7 @@ from deck_agent.design import measure
 from deck_agent.design.plan import frame_specs, lint_story, plan_deck, write_spec
 from deck_agent.design.profile import extract_profile
 from deck_agent.design.render import render_deck
+from deck_agent.revise.read import title_shape
 from deck_agent.design.spec import catalog, unsourced, validate
 
 DATA = Path(__file__).resolve().parents[1] / "data" / "specs"
@@ -80,7 +81,7 @@ def test_render_deck_draws_every_spec_without_problems(template, tmp_path):
     prs = Presentation(str(out))
     assert len(prs.slides) == len(GALLERY) + len(SPIKE)
     content = prs.slides[2]
-    assert content.shapes.title.text_frame.text.startswith("Three quarters")
+    assert title_shape(content).text_frame.text.startswith("Three quarters")
     charts = [sh for s in prs.slides for sh in s.shapes if sh.has_chart]
     assert len(charts) == 2                     # the line chart and the spike's column chart
 
@@ -89,7 +90,7 @@ def test_titles_lose_their_full_stop(template, tmp_path):
     spec = copy.deepcopy(SPIKE[1])
     spec["title"] = "Four guardrails keep model-written slides safe to ship."
     render_deck(template, [spec], tmp_path / "t.pptx")
-    title = Presentation(str(tmp_path / "t.pptx")).slides[0].shapes.title.text_frame.text
+    title = title_shape(Presentation(str(tmp_path / "t.pptx")).slides[0]).text_frame.text
     assert title == "Four guardrails keep model-written slides safe to ship"
 
 
@@ -252,3 +253,34 @@ def test_kpi_tiles_are_filled_and_coloured_in_the_extended_palette(template, tmp
         except (AttributeError, TypeError):
             pass
     assert len(fills) >= 3, f"the tiles should be filled with different colours, got {fills}"
+
+
+# --------------------------------------------------------------------------- drawn templates
+
+def test_a_drawn_template_gives_its_own_header_footer_and_cover(template, tmp_path):
+    """The sample template draws its header and footer as shapes (no title boxes): new slides
+    carry that furniture, filled in, and the cover is the template's own cover."""
+    P = extract_profile(template)
+    assert P.get("chrome") and P["title_rule"] is False
+    out = tmp_path / "drawn.pptx"
+    render_deck(template, GALLERY[:4], out)
+    prs = Presentation(str(out))
+    names = lambda s: {sh.name: sh for sh in s.shapes}
+    cover = names(prs.slides[0])
+    assert cover["deck-title"].text_frame.text == GALLERY[0]["title"]
+    content = names(prs.slides[2])
+    assert content["deck-title"].text_frame.text == GALLERY[2]["title"].rstrip(".")
+    assert content["deck-page"].text_frame.text == "3 / 4"
+    assert content["deck-deck-footer"].text_frame.text == GALLERY[0]["title"]
+    assert title_shape(prs.slides[2]).name == "deck-title"
+
+
+def test_a_replaced_slide_on_a_drawn_deck_is_numbered_against_the_final_total(template, tmp_path):
+    from deck_agent.revise.surgery import apply_changes
+
+    src = tmp_path / "src.pptx"
+    render_deck(template, GALLERY[:4], src)
+    out = tmp_path / "out.pptx"
+    apply_changes(src, [{"op": "replace", "slide": 3, "spec": GALLERY[3]}], extract_profile(src), out)
+    page = next(sh for sh in Presentation(str(out)).slides[2].shapes if sh.name == "deck-page")
+    assert page.text_frame.text == "3 / 4"

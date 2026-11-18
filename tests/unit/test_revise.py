@@ -97,22 +97,24 @@ def test_split_drops_tasks_for_slides_that_do_not_exist(offline_settings, templa
 
 # --------------------------------------------------------------------------- titles and roles
 
-def test_new_content_slides_share_one_title_position_and_rule(template, tmp_path):
+def test_new_content_slides_share_one_title_position_and_rule(boxed_template, tmp_path):
     from pptx.enum.text import MSO_ANCHOR
 
     from deck_agent.design.render import RULE_NAME, title_rule_y
 
-    deck = _deck(template, tmp_path)
+    deck = _deck(boxed_template, tmp_path)
     P = extract_profile(deck)
     prs = Presentation(str(deck))
-    content = [s for s in prs.slides if s.shapes.title is not None]
+    content = [s for s in prs.slides if s.slide_layout.name == P["layout"]]
     assert len(content) == 4
     for s in content:
         assert s.shapes.title.text_frame.vertical_anchor == MSO_ANCHOR.TOP
         rules = [sh for sh in s.shapes if sh.name == RULE_NAME]
         assert len(rules) == 1 and abs(rules[0].top / 914400 - title_rule_y(P)) < 0.01
-    covers = [s for s in prs.slides if s.shapes.title is None]
+    covers = [s for s in prs.slides if s.slide_layout.name != P["layout"]]
     assert covers and not any(sh.name == RULE_NAME for s in covers for sh in s.shapes)
+    # the cover is the template's own cover layout, its title box filled
+    assert prs.slides[0].slide_layout.name == P["cover_layout"] and prs.slides[0].shapes.title.text_frame.text
 
 
 def test_roles_tell_cover_and_sections_from_content(template, tmp_path):
@@ -120,13 +122,13 @@ def test_roles_tell_cover_and_sections_from_content(template, tmp_path):
     assert roles == ["cover", "section", "content", "content", "content", "content"]
 
 
-def test_align_titles_moves_content_titles_only_and_keeps_one_rule(template, tmp_path):
+def test_align_titles_moves_content_titles_only_and_keeps_one_rule(boxed_template, tmp_path):
     from pptx.util import Emu
 
     from deck_agent.design.render import RULE_NAME
     from deck_agent.revise.house import align_titles
 
-    deck = _deck(template, tmp_path)
+    deck = _deck(boxed_template, tmp_path)
     prs = Presentation(str(deck))
     for k, s in enumerate(prs.slides):                 # scramble the titles, as a hand edit would
         if s.shapes.title is not None:
