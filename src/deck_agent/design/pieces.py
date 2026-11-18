@@ -152,14 +152,14 @@ def arrowhead(connector, at: str = "end", size: str = "med") -> None:
 
 
 def line(slide, x1: float, y1: float, x2: float, y2: float, colour_hex: str, pt: float = 1.0,
-         arrow: str | None = None):
+         arrow: str | None = None, head: str = "med"):
     """A straight connector from (x1, y1) to (x2, y2); arrow: None, "end", "start" or "both"."""
     c = slide.shapes.add_connector(MSO_CONNECTOR.STRAIGHT, Emu(int(x1 * EMU)), Emu(int(y1 * EMU)),
                                    Emu(int(x2 * EMU)), Emu(int(y2 * EMU)))
     c.line.color.rgb = _rgb(colour_hex)
     c.line.width = Pt(pt)
     if arrow:
-        arrowhead(c, arrow)
+        arrowhead(c, arrow, head)
     return c
 
 
@@ -381,7 +381,7 @@ def steps(slide, box: Box, d: dict, P: dict) -> list[str]:
     gap = 0.08
     for a, b in zip(cols, cols[1:]):
         line(slide, a.x + a.w / 2 + diam / 2 + gap, cy, b.x + b.w / 2 - diam / 2 - gap, cy,
-             P["colours"]["line"], 2.0, arrow="end")
+             P["colours"]["muted"], 1.5, arrow="end", head="lg")
     for k, (col, item) in enumerate(zip(cols, items)):
         last = d.get("last_is_outcome") and k == n - 1
         tone = P["colours"]["accent"] if last else _cycle(P, k)
@@ -681,7 +681,9 @@ def timeline(slide, box: Box, d: dict, P: dict) -> list[str]:
     top = box.y + max(0.0, (box.h - total) / 2)               # centred in its cell
     line_y = top + when_h + 0.3
     x0, x1 = cols[0].x + 0.13, cols[-1].right
-    line(slide, x0, line_y, x1, line_y, P["colours"]["line"], 2.0, arrow="end")   # time runs on
+    line(slide, x0, line_y, x1, line_y, P["colours"]["line"], 2.0)
+    # Time runs on: a darker tip on the last stretch, so the head shows against the light track.
+    line(slide, x1 - 0.45, line_y, x1, line_y, P["colours"]["muted"], 2.0, arrow="end", head="lg")
     for k, (col, item) in enumerate(zip(cols, items)):
         last = d.get("last_is_outcome") and k == n - 1
         tone = P["colours"]["accent"] if last else _cycle(P, k)
