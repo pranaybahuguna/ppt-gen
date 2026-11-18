@@ -16,9 +16,13 @@ from __future__ import annotations
 import re
 
 from pptx.enum.shapes import MSO_SHAPE_TYPE, PP_PLACEHOLDER
+from pptx.oxml.ns import qn
 
 EMU = 914400
 _SKIP_PH = {PP_PLACEHOLDER.SLIDE_NUMBER, PP_PLACEHOLDER.FOOTER, PP_PLACEHOLDER.DATE}
+_PAGE = re.compile(r"^\s*\d{1,3}\s*((/|of)\s*\d{1,3})?\s*$", re.I)
+#: furniture a drawn template repeats on every slide (design.chrome names it when stamping)
+_FURNITURE = {"deck-page", "deck-footer", "deck-deck-footer", "deck-decor"}
 
 
 def _leaves(shapes, group=None):
@@ -34,9 +38,41 @@ def _box(sh) -> list[float]:
     return [round((v or 0) / EMU, 2) for v in (sh.left, sh.top, sh.width, sh.height)]
 
 
+def _max_pt(sh) -> float:
+    sizes = [r.font.size.pt for p in sh.text_frame.paragraphs for r in p.runs if r.font.size and r.text.strip()]
+    return max(sizes) if sizes else 0.0
+
+
+def title_shape(slide):
+    """A slide's title: its title box; else the template's drawn title ("deck-title", what our
+    renderer names it); else, on a deck that draws everything, the biggest text near the top.
+
+    Called by: slide_content, slide_role; revise.house; revise.audit.
+    """
+    t = slide.shapes.title
+    if t is not None:
+        return t
+    for sh in slide.shapes:
+        if sh.name == "deck-title":
+            return sh
+    H = slide.part.package.presentation_part.presentation.slide_height
+    top = [sh for sh in slide.shapes if sh.has_text_frame and sh.text_frame.text.strip()
+           and (sh.top or 0) < 0.22 * H and not _PAGE.match(sh.text_frame.text)]
+    best = max(top, key=lambda sh: (_max_pt(sh), -(sh.top or 0)), default=None)
+    return best if best is not None and _max_pt(best) >= 18 else None
+
+
 def _is_chrome(sh) -> bool:
-    """Page numbers, footers and dates: the deck's furniture, not the slide's content."""
-    return sh.is_placeholder and sh.placeholder_format.type in _SKIP_PH
+    """Page numbers, footers and dates: the deck's furniture, not the slide's content. On a deck
+    that draws them, small text along the very bottom of the slide."""
+    if sh.is_placeholder:
+        return sh.placeholder_format.type in _SKIP_PH
+    if sh.name in _FURNITURE:
+        return True
+    if not sh.has_text_frame or not sh.text_frame.text.strip():
+        return False
+    H = sh.part.package.presentation_part.presentation.slide_height
+    return (sh.top or 0) > 0.92 * H and 0 < _max_pt(sh) <= 10
 
 
 def _font_pt(sh) -> float | None:
@@ -54,6 +90,20 @@ def _fill(sh) -> str | None:
     except Exception:
         pass
     return None
+
+
+def _line(sh) -> dict:
+    """A connector's ends (inches) and its arrowheads: "end" (at the to-point), "start", "both"
+    or "none". Arrowheads live in a:ln as a:tailEnd (end) / a:headEnd (start); type="none" or
+    no element means no head."""
+    def has(tag):
+        ln = sh._element.spPr.find(qn("a:ln"))
+        el = ln.find(qn(tag)) if ln is not None else None
+        return el is not None and el.get("type", "none") != "none"
+    start, end = has("a:headEnd"), has("a:tailEnd")
+    arrow = "both" if start and end else "end" if end else "start" if start else "none"
+    pt = lambda x, y: [round(x / EMU, 2), round(y / EMU, 2)]
+    return {"from_in": pt(sh.begin_x, sh.begin_y), "to_in": pt(sh.end_x, sh.end_y), "arrow": arrow}
 
 
 def _chart(sh) -> dict:
@@ -120,11 +170,12 @@ def slide_content(slide) -> dict:
 
     Called by: revise.work.redesign.
     """
-    title = slide.shapes.title.text_frame.text.strip() if slide.shapes.title is not None else ""
+    ts = title_shape(slide)
+    title = ts.text_frame.text.strip() if ts is not None else ""
     texts, tables, charts, pictures = [], [], [], 0
     items = sorted(_leaves(slide.shapes), key=lambda p: ((p[0].top or 0), (p[0].left or 0)))
     for sh, _ in items:
-        if _is_chrome(sh) or (slide.shapes.title is not None and sh.shape_id == slide.shapes.title.shape_id):
+        if _is_chrome(sh) or (ts is not None and sh.shape_id == ts.shape_id):
             continue
         if sh.has_chart:
             charts.append(_chart(sh))
@@ -160,6 +211,8 @@ def slide_shapes(slide) -> list[dict]:
             e["chart"] = {**_chart(sh), "format": _chart_format(sh.chart)}
         if sh.has_table:
             e["table"] = [[c.text.strip()[:60] for c in row.cells] for row in sh.table.rows][:10]
+        if sh.shape_type == MSO_SHAPE_TYPE.LINE and hasattr(sh, "begin_x"):
+            e.update(_line(sh))
         fill = _fill(sh)
         if fill:
             e["fill"] = fill
@@ -175,7 +228,23 @@ _AGENDA = re.compile(r"^\s*(agenda|contents|table of contents|in this deck|overv
 _NUMBER = re.compile(r"^\s*\d{1,2}\s*$")
 
 
-def slide_role(slide, number: int, total: int, content_layout: str) -> str:
+def _where(sh) -> tuple[int, int]:
+    return round((sh.left or 0) / EMU * 10), round((sh.top or 0) / EMU * 10)
+
+
+def usual_title_place(prs) -> tuple[int, int] | None:
+    """Where most slides' titles sit (tenths of an inch), when at least two agree."""
+    from collections import Counter
+
+    places = Counter(_where(t) for s in prs.slides if (t := title_shape(s)) is not None)
+    if not places:
+        return None
+    place, n = places.most_common(1)[0]
+    return place if n >= 2 else None
+
+
+def slide_role(slide, number: int, total: int, content_layout: str,
+               title_place: tuple[int, int] | None = None) -> str:
     """What a slide is for, from how it is built: cover, section, agenda, content or closing.
 
     The deck's main layout (the one most of its slides use) marks content slides; a slide on
@@ -184,8 +253,13 @@ def slide_role(slide, number: int, total: int, content_layout: str) -> str:
     Called by: deck_outline; revise.house.
     """
     layout = slide.slide_layout.name.lower()
-    title = slide.shapes.title
+    title = title_shape(slide)
     title_text = title.text_frame.text.strip() if title is not None else ""
+    # On a deck that draws its titles, a content slide's title sits where the others' do; a
+    # cover's big title elsewhere does not make it a content slide.
+    at_home = title is not None and (slide.shapes.title is not None or title_place is None
+                                     or abs(_where(title)[0] - title_place[0]) <= 1
+                                     and abs(_where(title)[1] - title_place[1]) <= 1)
     texts = [sh.text_frame.text.strip() for sh, _ in _leaves(slide.shapes)
              if sh.has_text_frame and sh.text_frame.text.strip() and not _is_chrome(sh)]
     W, H = slide.part.package.presentation_part.presentation.slide_width, \
@@ -194,7 +268,7 @@ def slide_role(slide, number: int, total: int, content_layout: str) -> str:
                     for sh, _ in _leaves(slide.shapes) if not sh.has_text_frame or not sh.text_frame.text.strip())
     if "section" in layout:
         return "section"
-    if slide.slide_layout.name == content_layout and title_text:
+    if slide.slide_layout.name == content_layout and title_text and at_home:
         return "agenda" if _AGENDA.match(title_text) else "content"
     if number == 1 or "title slide" in layout:
         return "cover"
@@ -204,7 +278,7 @@ def slide_role(slide, number: int, total: int, content_layout: str) -> str:
         return "closing"
     if big_panel:
         return "section"
-    return "content" if title_text else "section"
+    return "content" if title_text and at_home else "section"
 
 
 def deck_outline(prs) -> list[dict]:
@@ -216,11 +290,12 @@ def deck_outline(prs) -> list[dict]:
 
     main = _content_layout(prs).name
     total = len(prs.slides)
+    place = usual_title_place(prs)
     out = []
     for n, slide in enumerate(prs.slides, start=1):
         c = slide_content(slide)
         words = " ".join(t["text"] for t in c["texts"]).split()
-        out.append({"slide": n, "role": slide_role(slide, n, total, main), "title": c["title"][:120],
+        out.append({"slide": n, "role": slide_role(slide, n, total, main, place), "title": c["title"][:120],
                     "text": " ".join(words[:40]), "charts": len(c["charts"]),
                     "tables": len(c["tables"]), "pictures": c["pictures"]})
     return out

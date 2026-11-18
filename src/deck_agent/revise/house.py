@@ -19,6 +19,7 @@ from pptx.util import Emu
 
 from ..design.render import RULE_NAME, content_top, draw_title_rule, title_rule_y
 from ..engine import bootstrap
+from .read import title_shape
 
 EMU = 914400
 
@@ -59,7 +60,7 @@ def align_titles(src: str | Path, dst: str | Path, P: dict, slides: list[int]) -
         if not 1 <= n <= len(prs.slides):
             continue
         slide = prs.slides[n - 1]
-        title = slide.shapes.title
+        title = title_shape(slide)
         if title is None:
             notes.append(f"slide {n}: has no title box; left as it is")
             continue

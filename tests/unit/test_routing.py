@@ -107,28 +107,84 @@ def test_the_router_stops_asking_after_two_goes(offline_settings):
     assert "twice" in (out["route_reason"] or "")
 
 
-def test_a_model_is_only_consulted_when_the_rules_are_unsure(offline_settings):
+def _with_deck(text):
+    from deck_agent.state import new_state
+
+    st = new_state("t", text)
+    st["deck_versions"] = ["s3://b/v001.pptx"]
+    return st
+
+
+class _Model:
+    name = "fake model"
+
+    def __init__(self, answer):
+        self.answer, self.calls = answer, []
+
+    def route(self, instruction, context):
+        self.calls.append((instruction, context))
+        if isinstance(self.answer, Exception):
+            raise self.answer
+        return self.answer
+
+
+def test_the_model_routes_every_request_even_the_obvious_ones(offline_settings):
+    from deck_agent.nodes.router import route
+
+    model = _Model({"route": "translate", "target_lang": "fr", "confidence": 0.95, "reason": "language"})
+    out = route(_with_deck("translate it into French"), planner=model)
+    assert out["route"] == "translate" and out["route_by"] == "model" and out["target_lang"] == "fr"
+    assert len(model.calls) == 1
+    instruction, context = model.calls[0]
+    assert context["has_current_deck"] and "messages" not in context, "a summary, never the transcript"
+
+
+def test_phrasings_the_word_lists_miss_are_routed_by_the_model(offline_settings):
+    from deck_agent.nodes.router import route
+    from deck_agent.llm.planner import rules_route
+
+    text = "tidy up the third one, it's a mess"
+    assert rules_route(text, HAS_DECK)["route"] == "ask"         # the word lists cannot tell
+    out = route(_with_deck(text), planner=_Model({"route": "edit", "slides": [3], "confidence": 0.85,
+                                                   "reason": "the third slide"}))
+    assert out["route"] == "edit" and out["slide_scope"] == [3]
+
+
+def test_a_model_answer_is_checked_before_it_is_acted_on(offline_settings):
     from deck_agent.nodes.router import route
     from deck_agent.state import new_state
 
-    calls = []
+    # an unknown route becomes a question
+    out = route(_with_deck("x"), planner=_Model({"route": "rebuild", "confidence": 0.99}))
+    assert out["route"] == "ask" and out["pending_question"]
+    # no deck in the session: nothing to edit, whatever the model says
+    out = route(new_state("t", "shorten slide 2"), planner=_Model({"route": "edit", "confidence": 0.9}))
+    assert out["route"] == "ask" and "deck" in out["pending_question"].lower()
+    # a translation needs a language
+    out = route(_with_deck("translate it"), planner=_Model({"route": "translate", "confidence": 0.9}))
+    assert out["route"] == "ask" and "language" in out["pending_question"].lower()
+    # junk slide numbers are dropped, a missing confidence is zero (so: ask)
+    out = route(_with_deck("x"), planner=_Model({"route": "edit", "slides": ["two", 3, -1]}))
+    assert out["route"] == "ask" and out["route_confidence"] == 0.0
 
-    class Counting:
-        name = "counting"
 
-        def route(self, instruction, context):
-            calls.append(instruction)
-            return {"route": "edit", "confidence": 0.9, "reason": "model"}
+def test_the_word_rules_stand_in_when_the_model_fails(offline_settings):
+    from deck_agent.nodes.router import route
 
-    confident = new_state("t", "translate it into French")
-    confident["deck_versions"] = ["s3://b/v001.pptx"]
-    assert route(confident, planner=Counting())["route_by"] == "rules"
-    assert calls == [], "a model was asked to confirm something the rules were sure about"
+    out = route(_with_deck("translate it into French"), planner=_Model(TimeoutError("slow")))
+    assert out["route"] == "translate" and out["route_by"] == "rules"
+    assert "router model failed" in out["route_reason"]
 
-    unsure = new_state("t", "do the thing with this deck")
-    unsure["deck_versions"] = ["s3://b/v001.pptx"]
-    assert route(unsure, planner=Counting())["route_by"] == "model"
-    assert len(calls) == 1
+
+def test_the_router_model_decides_the_palette(offline_settings):
+    from deck_agent.nodes.router import route
+
+    out = route(_with_deck("make it livelier"),
+                planner=_Model({"route": "edit", "palette": "extended", "confidence": 0.8}))
+    assert out["palette"] == "extended"
+    out = route(_with_deck("fix the typo on slide 2"),
+                planner=_Model({"route": "edit", "slides": [2], "palette": None, "confidence": 0.9}))
+    assert "palette" not in out, "nothing said about colour: the deck keeps its palette"
 
 
 # --------------------------------------------------------------------------- restyle is an edit

@@ -70,7 +70,10 @@ def brand_colours(prs) -> dict[str, str]:
         ranked.append(Counter({_mix(ranked[0].most_common(1)[0][0], "000000", 0.35): 1}))
 
     def shades(fam: Counter) -> tuple[str, str, str]:
-        base = fam.most_common(1)[0][0]
+        # The base is a colour that can carry text and fills: not a pale tint used for rules
+        # and backgrounds (a slate family's E2E8F0), when the family has anything deeper.
+        deep = Counter({c: n for c, n in fam.items() if _hsl(c)[1] <= 0.8})
+        base = (deep or fam).most_common(1)[0][0]
         by_l = sorted(fam, key=lambda c: _hsl(c)[1])
         dark = by_l[0] if _hsl(by_l[0])[1] < _hsl(base)[1] - 0.06 else _mix(base, "000000", 0.3)
         light = by_l[-1] if _hsl(by_l[-1])[1] > _hsl(base)[1] + 0.1 else _mix(base, "FFFFFF", 0.6)
@@ -154,8 +157,36 @@ def _content_layout(prs):
         if lay is not None and any(ph.placeholder_format.type in (PP_PLACEHOLDER.TITLE, PP_PLACEHOLDER.CENTER_TITLE)
                                    for ph in lay.placeholders):
             return lay
-    return next(l for l in prs.slide_layouts
-                if any(ph.placeholder_format.type == PP_PLACEHOLDER.TITLE for ph in l.placeholders))
+    titled = next((l for l in prs.slide_layouts
+                   if any(ph.placeholder_format.type == PP_PLACEHOLDER.TITLE for ph in l.placeholders)), None)
+    if titled is not None:
+        return titled
+    # No title box anywhere: a deck that draws everything. Its slides' own layout.
+    return layouts.get(used.most_common(1)[0][0]) if used else prs.slide_layouts[0]
+
+
+def _title_placeholder_look(prs) -> dict:
+    """How the template's own slides style their titles (colour, font, size), most common first;
+    an empty dict when no slide has a title box to learn from."""
+    from .chrome import look
+
+    looks = [look(s.shapes.title) for s in prs.slides
+             if s.shapes.title is not None and s.shapes.title.text_frame.text.strip()]
+    out = {}
+    for key in ("colour", "font", "pt"):
+        vals = Counter(lk[key] for lk in looks if lk[key])
+        if vals:
+            out[key] = vals.most_common(1)[0][0]
+    return out
+
+
+def _cover_layout(prs) -> str | None:
+    """The template's own cover layout (a centred title box): the first slide's, if it has one."""
+    def is_cover(l):
+        return any(ph.placeholder_format.type == PP_PLACEHOLDER.CENTER_TITLE for ph in l.placeholders)
+    if len(prs.slides) and is_cover(prs.slides[0].slide_layout):
+        return prs.slides[0].slide_layout.name
+    return next((l.name for l in prs.slide_layouts if is_cover(l)), None)
 
 
 def _fonts_and_sizes(prs) -> tuple[str, float, float]:
@@ -183,12 +214,23 @@ def extract_profile(template: str | Path) -> dict:
 
     Called by: design.render.render_deck; the design spike script.
     """
+    from . import chrome
+
     prs = Presentation(str(template))
     W, H = prs.slide_width / EMU, prs.slide_height / EMU
+    # A deck whose slides mostly have no title box draws its header itself: learn it from them.
+    boxed = sum(1 for s in prs.slides if s.shapes.title is not None)
+    drawn = chrome.learn(prs) if boxed * 2 < len(prs.slides) else None
+    if drawn is not None:
+        return _drawn_profile(template, prs, drawn)
     layout = _content_layout(prs)
-    title = next(ph for ph in layout.placeholders
-                 if ph.placeholder_format.type in (PP_PLACEHOLDER.TITLE, PP_PLACEHOLDER.CENTER_TITLE))
-    tx, ty, tw, th = (v / EMU for v in (title.left, title.top, title.width, title.height))
+    title = next((ph for ph in layout.placeholders
+                  if ph.placeholder_format.type in (PP_PLACEHOLDER.TITLE, PP_PLACEHOLDER.CENTER_TITLE)), None)
+    if title is not None:
+        tx, ty, tw, th = (v / EMU for v in (title.left, title.top, title.width, title.height))
+    else:                                    # nothing to learn from: a standard header position
+        tx, ty, tw, th = 0.5, 0.35, W - 1.0, 0.9
+    tlook = _title_placeholder_look(prs)
 
     # The safe area: under the title, above whatever the layout puts along the bottom (footer,
     # page number, rules), with the title's left margin on both sides.
@@ -207,11 +249,39 @@ def extract_profile(template: str | Path) -> dict:
         "slide": {"w": round(W, 3), "h": round(H, 3)},
         "layout": layout.name,
         "blank_layout": blank.name if blank is not None else None,
+        "cover_layout": _cover_layout(prs),
+        # The template's own title look when its slides show one; otherwise the title keeps
+        # whatever its layout gives it (colour None: not overridden).
         "title": {"box": [round(tx, 3), round(ty, 3), round(tw, 3), round(th, 3)],
-                  "font": font, "bold": True, "colour": "262626", "max_pt": 30, "min_pt": 22},
+                  "font": tlook.get("font") or font, "bold": True, "colour": tlook.get("colour"),
+                  "max_pt": min(tlook.get("pt") or 30, 36), "min_pt": 22},
         "area": [round(tx, 3), round(ty + th + 0.08, 3), round(W - 2 * tx, 3),
                  round(floor - 0.14 - (ty + th + 0.08), 3)],
         "font": font, "body_pt": body_pt, "small_pt": small_pt,
         "title_rule": True,                  # a thin accent line under every content slide's title
         "colours": brand_colours(prs),
+    }
+
+
+def _drawn_profile(template, prs, drawn: dict) -> dict:
+    """The profile of a deck that draws its own header, footer and cover (see design.chrome)."""
+    W, H = prs.slide_width / EMU, prs.slide_height / EMU
+    used = Counter(s.slide_layout.name for s in prs.slides).most_common(1)[0][0]
+    layout = next(l for l in prs.slide_layouts if l.name == used)   # the one its slides are drawn on
+    font, body_pt, small_pt = _fonts_and_sizes(prs)
+    t = drawn["title"]
+    pt = t.get("pt") or 28
+    return {
+        "template": Path(template).name,
+        "slide": {"w": round(W, 3), "h": round(H, 3)},
+        "layout": layout.name,
+        "blank_layout": layout.name,
+        "cover_layout": None,
+        "title": {"box": t["box"], "font": t.get("font") or font, "bold": t.get("bold") is not False,
+                  "colour": t.get("colour"), "max_pt": pt, "min_pt": max(18, pt - 6)},
+        "area": drawn["area"],
+        "font": font, "body_pt": body_pt, "small_pt": small_pt,
+        "title_rule": False,                 # the deck has its own header decoration
+        "colours": brand_colours(prs),
+        "chrome": drawn,
     }

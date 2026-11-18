@@ -27,7 +27,7 @@ from pptx.util import Pt
 
 from ..design import measure
 from ..design.profile import _hsl, with_palette
-from .read import _chart, _leaves
+from .read import _chart, _leaves, title_shape
 
 EMU = 914400
 SMALL_PT = 10.0           # text under this is hard to read when presented - unless the template
@@ -230,7 +230,7 @@ def fix_chart_colours(prs, slides: list[int], P: dict, *more: dict) -> list[str]
 # --------------------------------------------------------------------------- titles
 
 def _title_pt(slide) -> float | None:
-    t = slide.shapes.title
+    t = title_shape(slide)
     if t is None or not t.text_frame.text.strip():
         return None
     sizes = [r.font.size.pt for p in t.text_frame.paragraphs for r in p.runs if r.font.size]
@@ -250,10 +250,12 @@ def fix_title_sizes(prs, slides: list[int], P: dict) -> list[str]:
     for n, pt in sizes.items():
         if pt == common:
             continue
-        title = prs.slides[n - 1].shapes.title
+        title = title_shape(prs.slides[n - 1])
         w = (title.width or 0) / EMU or t["box"][2]
         # Two lines is the rule (as when slides are written); the box's height is not the limit.
-        if not measure.fits(title.text_frame.text.strip(), common, w, 10, family=t["font"],
+        # A drawn title (no title box) cannot grow: its own height is the limit there.
+        room = 10 if title.is_placeholder else (title.height or 0) / EMU + 0.05
+        if not measure.fits(title.text_frame.text.strip(), common, w, room, family=t["font"],
                             bold=True, max_lines=2):
             done.append(f"slide {n}: title left at {pt:g}pt - too long for {common:g}pt in two lines")
             continue

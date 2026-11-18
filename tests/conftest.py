@@ -187,3 +187,21 @@ def scratch_keys(needs_stack):
         st.delete([Ref(st.bucket, k).uri for k in keys])
     except Exception as e:                       # noqa: BLE001
         print(f"could not clean up {keys}: {e}")
+
+
+@pytest.fixture
+def boxed_template(tmp_path_factory) -> Path:
+    """A template whose slides use real title boxes (Office's own layouts), for the title-box path."""
+    from pptx import Presentation
+
+    out = tmp_path_factory.mktemp("boxed") / "boxed.pptx"
+    prs = Presentation()
+    prs.slide_width, prs.slide_height = 12192000, 6858000
+    cover = prs.slides.add_slide(prs.slide_layouts[0])
+    cover.shapes.title.text = "Quarterly review"
+    for k in range(3):
+        s = prs.slides.add_slide(prs.slide_layouts[1])
+        s.shapes.title.text = f"Point {k + 1}"
+        s.placeholders[1].text_frame.text = "Body text in the template's own size"
+    prs.save(str(out))
+    return out

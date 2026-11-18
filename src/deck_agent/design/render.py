@@ -31,7 +31,7 @@ from pptx.enum.shapes import PP_PLACEHOLDER
 from pptx.enum.text import MSO_ANCHOR
 from pptx.util import Pt
 
-from . import measure
+from . import chrome, measure
 from .pieces import PIECES, Box, _rgb
 from .profile import extract_profile
 
@@ -77,8 +77,16 @@ def _page_number(slide, number: int) -> None:
 def _title(slide, spec: dict, P: dict) -> list[str]:
     """Write the title into the layout's own title box, sized to fit in at most two lines."""
     t = P["title"]
-    ph = slide.shapes.title
     x, y, w, h = t["box"]
+    drawn = _named(slide, "deck-title")
+    if drawn is not None:                # the template's own drawn title: keep its look, size to fit
+        pt = measure.fit(spec["title"], w, h, t["max_pt"], t["min_pt"], family=t["font"],
+                         bold=t.get("bold", True), max_lines=2)
+        problems = [] if pt is not None else \
+            ["title: too long for the template's title line; make the point in about 8 words"]
+        chrome.set_text(drawn, spec["title"], pt or t["min_pt"])
+        return problems
+    ph = slide.shapes.title
     if ph is None:                     # a deck whose layout has no title box: draw one where it would be
         from pptx.util import Emu
 
@@ -98,8 +106,13 @@ def _title(slide, spec: dict, P: dict) -> list[str]:
     tf.vertical_anchor = MSO_ANCHOR.TOP
     for r in tf.paragraphs[0].runs:
         r.font.size, r.font.bold, r.font.name = Pt(pt), True, t["font"]
-        r.font.color.rgb = _rgb(t["colour"])
+        if t.get("colour"):              # None: the layout's own title colour stays
+            r.font.color.rgb = _rgb(t["colour"])
     return problems
+
+
+def _named(slide, name: str):
+    return next((sh for sh in slide.shapes if sh.name == name), None)
 
 
 #: The rule under a content slide's title: this far below the title box, and content starts
@@ -156,7 +169,13 @@ def render_slide(slide, spec: dict, P: dict) -> list[str]:
         draw_title_rule(slide, P)
     top = content_top(P)
     area = Box(area.x, top, area.w, area.bottom - top)
-    if spec.get("subtitle"):
+    sub_shape = _named(slide, "deck-subtitle")
+    if sub_shape is not None:            # the template's own subtitle line, in the header
+        if spec.get("subtitle"):
+            chrome.set_text(sub_shape, spec["subtitle"])
+        else:
+            chrome.remove(sub_shape)
+    elif spec.get("subtitle"):
         spt = P["body_pt"] + 3
         sub, area = area.take_top(measure.height_in(1, spt) + 0.02, gap=0.25)
         _subtitle(slide, sub, spec["subtitle"], spt, P)
@@ -302,6 +321,13 @@ def render_deck(template: str | Path, specs: list[dict], out: str | Path,
         _, found = add_spec_slide(prs, spec, P, n)
         if found:
             problems[n] = found
+    # A footer that named the template's own deck now names this one.
+    deck_title = next((s.get("title") for s in specs if s.get("type") == "cover"), None)
+    for n, slide in enumerate(prs.slides, start=1):
+        number_page(slide, P, n, len(prs.slides))
+        foot = _named(slide, "deck-deck-footer")
+        if foot is not None and deck_title:
+            chrome.set_text(foot, deck_title)
     prs.save(str(out))
     return {"out": str(out), "problems": problems}
 
@@ -318,12 +344,87 @@ def add_spec_slide(prs, spec: dict, P: dict, number: int):
     blank = layouts.get(P.get("blank_layout") or "", layout)
     kind = spec.get("type", "content")
     spec = {**copy.deepcopy(spec), "title": _no_full_stop(spec.get("title") or "")}
+    C = P.get("chrome") or {}
+    if kind == "cover" and C.get("cover"):
+        slide = prs.slides.add_slide(blank)
+        _drop_placeholders(slide)
+        return slide, _drawn_cover(slide, spec, P)
+    if kind == "cover" and P.get("cover_layout") in layouts:
+        slide = prs.slides.add_slide(layouts[P["cover_layout"]])
+        return slide, _layout_cover(slide, spec, P)
     if kind in ("cover", "section"):
         slide = prs.slides.add_slide(blank)
-        for ph in list(slide.placeholders):          # a fallback layout's title box
-            ph._element.getparent().remove(ph._element)
+        _drop_placeholders(slide)                    # a fallback layout's title box
         draw = render_cover if kind == "cover" else render_section
         return slide, draw(slide, spec, P)
     slide = prs.slides.add_slide(layout)
-    _page_number(slide, number)
+    if C:
+        _drop_placeholders(slide)
+        chrome.set_background(slide, C.get("background"))
+        chrome.stamp(slide, C["content"])
+        number_page(slide, P, number, len(prs.slides))
+    else:
+        _page_number(slide, number)
     return slide, render_slide(slide, spec, P)
+
+
+def _drop_placeholders(slide) -> None:
+    for ph in list(slide.placeholders):
+        ph._element.getparent().remove(ph._element)
+
+
+def number_page(slide, P: dict, n: int, total: int) -> None:
+    """The template's drawn page number ("3 / 27"), for slide n of total."""
+    page = _named(slide, "deck-page")
+    if page is not None:
+        fmt = (P.get("chrome") or {}).get("page_format") or "{n}"
+        chrome.set_text(page, fmt.format(n=n, total=total))
+
+
+def _drawn_cover(slide, spec: dict, P: dict) -> list[str]:
+    """The template's own cover, refilled: its background and decoration, its title, subtitle
+    and bottom line in their own places and looks. Its facts (figures, cards) are not copied."""
+    cov = P["chrome"]["cover"]
+    chrome.set_background(slide, cov.get("background"))
+    found = chrome.stamp(slide, cov["shapes"])
+    problems = []
+    t = cov["title"]
+    if "title" in found:
+        _, _, w, h = t["box"]
+        top = t.get("pt") or 44
+        pt = measure.fit(spec["title"], w, max(h, measure.height_in(2, top * 0.6)), top,
+                         min(28, top), family=t.get("font") or P["font"], bold=True, max_lines=2)
+        if pt is None:
+            problems.append("cover: the title is too long; at most ~8 words")
+        pt = pt or min(28, top)
+        chrome.set_text(found["title"], spec["title"], pt)
+        # A title on two lines where the template had one: the subtitle moves down to make room.
+        lines = len(measure.wrap(spec["title"], pt, w, t.get("font") or P["font"], True))
+        extra = measure.height_in(lines, pt) - h
+        if extra > 0 and "subtitle" in found:
+            found["subtitle"].top = found["subtitle"].top + int((extra + 0.1) * 914400)
+    for role, value in (("subtitle", spec.get("subtitle")), ("meta", spec.get("meta"))):
+        if role in found:
+            if value:
+                chrome.set_text(found[role], value)
+            else:
+                chrome.remove(found[role])
+    if spec.get("notes"):
+        slide.notes_slide.notes_text_frame.text = spec["notes"]
+    return problems
+
+
+def _layout_cover(slide, spec: dict, P: dict) -> list[str]:
+    """The template's own cover layout: its title and subtitle boxes filled, the rest left out."""
+    sub = "\n".join(v for v in (spec.get("subtitle"), spec.get("meta")) if v)
+    for ph in list(slide.placeholders):
+        kind = ph.placeholder_format.type
+        if kind == PP_PLACEHOLDER.CENTER_TITLE:
+            ph.text_frame.text = spec["title"]
+        elif kind == PP_PLACEHOLDER.SUBTITLE and sub:
+            ph.text_frame.text = sub
+        else:
+            ph._element.getparent().remove(ph._element)
+    if spec.get("notes"):
+        slide.notes_slide.notes_text_frame.text = spec["notes"]
+    return []

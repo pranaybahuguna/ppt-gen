@@ -13,7 +13,7 @@ from pathlib import Path
 
 from pptx import Presentation
 
-from ..design.render import add_spec_slide
+from ..design.render import add_spec_slide, number_page
 from ..engine import bootstrap
 
 
@@ -101,5 +101,9 @@ def apply_changes(src: str | Path, changes: list[dict], P: dict, dst: str | Path
     problems = {order.index(el) + 1: problems_by_el[k] for k, el in drawn.items()
                 if el in order and problems_by_el[k]}
     at = [order.index(el) + 1 if el is not None and el in order else None for el in drawn_for]
+    # Drawn slides number themselves "n / total" now that the order and total are final
+    # (the slides nobody touched keep theirs: their bytes are not ours to change).
+    for n in changed:
+        number_page(prs.slides[n - 1], P, n, len(order))
     save_preserving(prs, str(src), str(dst))
     return {"position": position, "changed": changed, "problems": problems, "at": at}

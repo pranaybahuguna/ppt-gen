@@ -51,7 +51,9 @@ def storyline(state: DeckState, planner=None, log=print) -> dict:
     from .profile import palette_asked
 
     return {"story": story, "outline": story, "deck_frame": frame, "template": template,
-            "palette": palette_asked(state.get("instruction") or "", state.get("palette")),
+            # The router model read the request for colour; the word list is the offline fallback.
+            "palette": state.get("palette") if state.get("route_by") == "model"
+            else palette_asked(state.get("instruction") or "", state.get("palette")),
             "slide_specs": CLEAR,
             "trace": [step("storyline", slides=len(frame), lint=len(story.get("lint") or []))]}
 

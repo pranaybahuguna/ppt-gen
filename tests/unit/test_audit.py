@@ -77,8 +77,8 @@ def test_chart_colours_match_across_slides_differ_within_a_chart_and_keep_to_the
     assert A.fix_chart_colours(prs, [3, 4, 5], P) == []
 
 
-def test_content_titles_take_the_common_size_and_tiny_text_is_found(template, tmp_path):
-    src = _deck(template, tmp_path)
+def test_content_titles_take_the_common_size_and_tiny_text_is_found(boxed_template, tmp_path):
+    src = _deck(boxed_template, tmp_path)
     P = extract_profile(src)
     prs = Presentation(str(src))
     sizes = {3: 24, 4: 24, 5: 30, 6: 24}
