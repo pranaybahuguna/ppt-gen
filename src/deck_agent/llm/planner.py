@@ -40,7 +40,7 @@ class AgentPlanner(OpenAICompatPlanner):
         """Ask the model which route a request is (ROUTE_SYSTEM). -> {route, confidence, reason,
         ...}
 
-        Called by: nodes.router.route, only when the rules are unsure.
+        Called by: nodes.router.route, for every request.
         """
         return self._chat(ROUTE_SYSTEM, json.dumps({"request": instruction, "session": context},
                                                    ensure_ascii=False))
@@ -160,6 +160,7 @@ class StubAgentPlanner(StubPlanner):
 
     name = "stub (offline, deterministic)"
     vision = False
+    routes_by = "rules"                      # nodes.router records who decided
 
     # ---- the create route, offline: facts in groups of three, a varied visual for each -----
 
@@ -272,11 +273,9 @@ class StubAgentPlanner(StubPlanner):
 
 
 def rules_route(instruction: str, context: dict) -> dict:
-    """Routing without a model. Used by the stub, and tried first by the real router.
-
-    These are the cases where a model call would be waste: there is no deck at all, or the verb
-    is unambiguous. Anything else returns a low confidence and lets the caller decide whether to
-    spend a call or ask the person.
+    """Routing by word lists, without a model: the offline stub's router, and the fallback when
+    the router model fails. Brittle by nature - it knows the words it lists and nothing else -
+    so anything it is unsure of returns a low confidence and the person is asked.
 
     Called by: StubAgentPlanner.route, nodes.router.route.
     """

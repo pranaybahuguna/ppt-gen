@@ -242,20 +242,27 @@ storyline, its facts and its palette stay.
 (it is untrusted input) and sorts attachments: a deck to work on becomes `source_deck`; a
 template becomes `template`.
 
-**2. `route`** - decides what the request is. Plain rules first, no model:
+**2. `route`** - decides what the request is. A model reads every request (the request plus a
+short summary of the session - is there a deck, a template - never the conversation), because
+people say the same thing in too many ways for word lists: "tidy up the third one", "can you do
+this one in German", "make it pop".
 
-| The request | Route |
+| The model says | Route |
 |---|---|
-| there is no deck yet | create |
-| names a language ("into French") | translate |
-| "restyle slide 3", "rebrand the deck" | edit - redesigned in the deck's own template (no slides named: the rules are unsure, so the model decides) |
-| an editing verb, or slide numbers | edit |
-| anything else, while a deck exists | the model decides |
+| a new deck, or there is no deck yet | create |
+| the same deck in another language | translate (with the ISO code: "German" -> `de`) |
+| change the deck: text, slides, structure, how it looks ("restyle", "make it pop") | edit - redesigned in the deck's own template |
+| not something done to a deck | decline |
+| it cannot tell | ask |
 
-The model is asked only when the rules are unsure (confidence under `router_confidence_floor`,
-0.6). If it is unsure too, the graph stops and asks you (`ask`, a LangGraph interrupt) - at most
-twice, then it declines. Out: `route`, `route_reason`, `route_by` ("rules" or "model"),
-`slide_scope`, `target_lang`.
+Its answer is checked before anything runs: an unknown route becomes a question, slide numbers
+must be numbers, there is nothing to edit or translate without a deck, and a translation needs a
+language. The same call says whether the request asked for more colour (`palette`). If the model
+is unsure (confidence under `router_confidence_floor`, 0.6) the graph stops and asks you (`ask`,
+a LangGraph interrupt) - at most twice, then it declines. The old word lists
+(`llm.planner.rules_route`) route only offline (the stub planner) or when the model call fails.
+Out: `route`, `route_reason`, `route_by` ("model" or "rules"), `slide_scope`, `target_lang`,
+`palette`.
 
 ### Create: from context to a finished deck
 

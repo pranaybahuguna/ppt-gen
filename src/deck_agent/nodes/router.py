@@ -1,17 +1,20 @@
 """route - decide what this request is, before spending anything on it.
 
-Rules first, a model only when the rules are unsure. That ordering is the whole point: most
-requests are obvious ("make me a deck about X" with nothing attached can only be a new deck;
-"translate it into French" can only be a translation), and a model call to confirm the obvious
-is pure cost and a new way to be wrong.
+A model decides. People say the same thing in too many ways ("tidy up the third one", "make it
+pop", "can you do this one in German") for word lists to keep up, and a wrong route is the
+costliest mistake the graph can make: it rebuilds or rewrites the wrong thing.
 
 The model is given the request and a *summary* of the session - is there a current deck, is
-there a template - never the conversation. A router that
-needs the transcript to know which deck is meant is a router built on sand; `state.py` says
-more about why.
+there a template - never the conversation. A router that needs the transcript to know which
+deck is meant is a router built on sand; `state.py` says more about why.
 
-When neither the rules nor the model are confident, the graph stops and asks one short
-question. That is much cheaper than confidently rebuilding the wrong deck.
+Its answer is checked, not trusted: an unknown route becomes a question, slide numbers must be
+numbers, and with no deck in the session there is nothing to edit or translate. The word rules
+(llm.planner.rules_route) are only a fallback: offline (the stub planner routes with them) or
+when the model call fails.
+
+When the model is not confident, the graph stops and asks one short question. That is much
+cheaper than confidently rebuilding the wrong deck.
 """
 from __future__ import annotations
 
@@ -22,16 +25,42 @@ from ..settings import settings
 from ..state import SUPPORTED, DeckState, step, summarise
 
 MAX_ASKS = 2
+ROUTES = {"create", "edit", "translate", "ask", "decline"}
+
+
+def checked(answer: dict, context: dict) -> dict:
+    """A router answer made safe to act on. Called by: route."""
+    chosen = answer.get("route")
+    out = {"route": chosen if chosen in ROUTES else "ask",
+           "slides": sorted({int(n) for n in answer.get("slides") or []
+                             if isinstance(n, (int, float, str)) and str(n).strip().isdigit() and int(n) > 0}),
+           "target_lang": answer.get("target_lang") or None,
+           "reason": str(answer.get("reason") or ""),
+           "question": answer.get("question"),
+           "palette": answer.get("palette") if answer.get("palette") in ("brand", "extended") else None}
+    try:
+        out["confidence"] = max(0.0, min(1.0, float(answer.get("confidence"))))
+    except (TypeError, ValueError):
+        out["confidence"] = 0.0
+    if chosen not in ROUTES:
+        out["question"] = out["question"] or "Do you want a new deck, changes to this one, or a translation?"
+    has_deck = context.get("has_current_deck") or context.get("has_attached_deck")
+    if out["route"] in ("edit", "translate") and not has_deck:
+        out.update(route="ask", question="Which deck should I work on? Attach it and say again.",
+                   reason="the request is about a deck, but there is none in this session")
+    if out["route"] == "translate" and not out["target_lang"]:
+        out.update(route="ask", question="Which language should I translate it into?")
+    return out
 
 
 def route(state: DeckState, planner=None) -> dict:
-    """Decide what the request is: create, edit, translate, custom, ask or decline.
+    """Decide what the request is: create, edit, translate, ask or decline.
 
     Graph node. Runs: after intake on every turn, and again after ask once the person has
         answered.
     Reads: instruction, slide_scope, target_lang, trace (to count questions already asked), and
         a summary of the session (is there a deck).
-    Writes: route, route_reason, route_confidence, route_by, target_lang, slide_scope;
+    Writes: route, route_reason, route_confidence, route_by, target_lang, slide_scope, palette;
         pending_question when it has to ask.
     Next: after_route -> gather (create) | split (edit) | translate_plan | ask | decline.
     Called by: LangGraph, registered in graph.build_graph.
@@ -40,23 +69,24 @@ def route(state: DeckState, planner=None) -> dict:
     instruction = state.get("instruction") or ""
     context = summarise(state)
 
-    guess = rules_route(instruction, context)
-    by = "rules"
-    # The rules are allowed to decide only when they are sure AND they reached a real route.
-    if guess["route"] == "ask" or guess["confidence"] < s.router_confidence_floor:
-        if planner is not None and hasattr(planner, "route"):
-            try:
-                answer = planner.route(instruction, context) or {}
-                if answer.get("route"):
-                    guess, by = {**guess, **answer}, "model"
-            except Exception as e:
-                guess = {**guess, "reason": f"{guess['reason']} (the router model failed: "
-                                            f"{e.__class__.__name__})"}
+    guess, by = None, "model"
+    if planner is not None and hasattr(planner, "route"):
+        by = getattr(planner, "routes_by", "model")
+        try:
+            guess = checked(planner.route(instruction, context) or {}, context)
+        except Exception as e:                 # the model is down: the word rules stand in
+            fallback = rules_route(instruction, context)
+            guess = checked({**fallback, "reason": f"{fallback['reason']} (the router model failed: "
+                                                   f"{e.__class__.__name__}; decided by word rules)"},
+                            context)
+            by = "rules"
+    if guess is None:
+        guess, by = checked(rules_route(instruction, context), context), "rules"
 
-    chosen = guess.get("route") or "ask"
-    confidence = float(guess.get("confidence") or 0)
+    chosen = guess["route"]
+    confidence = guess["confidence"]
     asked = sum(1 for t in state.get("trace") or [] if t.get("node") == "ask")
-    if confidence < s.router_confidence_floor and chosen != "ask" and asked < MAX_ASKS:
+    if confidence < s.router_confidence_floor and chosen not in ("ask", "decline") and asked < MAX_ASKS:
         chosen = "ask"
 
     out: dict = {
@@ -68,6 +98,8 @@ def route(state: DeckState, planner=None) -> dict:
         "slide_scope": guess.get("slides") or state.get("slide_scope") or None,
         "trace": [step("route", route=chosen, by=by, confidence=confidence)],
     }
+    if guess.get("palette"):                   # only when the request said something about colour
+        out["palette"] = guess["palette"]
     if chosen == "ask":
         if asked >= MAX_ASKS:
             out["route"] = "decline"
