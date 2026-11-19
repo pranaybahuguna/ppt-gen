@@ -163,7 +163,10 @@ def learn(prs) -> dict | None:
     header = [c["box"] for c in content if c["box"][1] < H * 0.3]
     footer = [c["box"] for c in content if c["box"][1] > H * 0.75]
     left = min([b[0] for b in header + footer] or [0.5])
-    right = max([b[0] + b[2] for b in footer] or [W - left])
+    # The right edge is where the template's own rules end (a footer line), not where a
+    # right-aligned page number's box happens to stop.
+    rules = [c["box"] for c in content if c["role"] == "decor" and c["box"][1] > H * 0.75]
+    right = max([b[0] + b[2] for b in (rules or footer)] or [W - left])
     if right - left < W * 0.6:
         right = W - left
     top = max(b[1] + b[3] for b in header) + 0.2
