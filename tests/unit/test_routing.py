@@ -229,3 +229,51 @@ def test_restyling_the_whole_deck_is_an_edit_the_rules_are_unsure_about(request_
 def test_a_restyle_keeps_the_slide_numbers_it_was_given():
     answer = rules_route("restyle slides 2-4 onto the new template", HAS_DECK)
     assert answer["route"] == "edit" and answer["slides"] == [2, 3, 4]
+
+
+# --------------------------------------------------------------------------- the caller's endpoint decides
+
+def test_the_edit_endpoint_is_an_edit_without_asking_a_model(offline_settings):
+    """POST /decks/{id}/edit already says what the request is: the router does not second-guess
+    it, and no model is called for it - even when the words sound like something else."""
+    from deck_agent.nodes.router import route
+
+    st = _with_deck("translate the labels on slide 3 into plain English")
+    st["requested_route"] = "edit"
+    model = _Model({"route": "translate", "target_lang": "en", "confidence": 0.99})
+    out = route(st, planner=model)
+    assert out["route"] == "edit" and out["route_by"] == "caller"
+    assert model.calls == [], "the endpoint already decided; the model was asked anyway"
+
+
+def test_an_edit_with_no_deck_is_declined_plainly(offline_settings):
+    from deck_agent.nodes.router import route
+    from deck_agent.state import new_state
+
+    st = new_state("t", "shorten slide 2", requested_route="edit")
+    out = route(st, planner=_Model({"route": "edit", "confidence": 1.0}))
+    assert out["route"] == "decline" and "cannot edit" in out["route_reason"]
+    assert "pending_question" not in out
+
+
+def test_the_translate_endpoint_keeps_its_language(offline_settings):
+    from deck_agent.nodes.router import route
+
+    st = _with_deck("translate into de")
+    st.update(requested_route="translate", target_lang="de", slide_scope=[2, 3])
+    out = route(st, planner=_Model(RuntimeError("must not be called")))
+    assert out["route"] == "translate" and out["target_lang"] == "de" and out["slide_scope"] == [2, 3]
+
+
+def test_the_ask_endpoint_still_lets_the_model_decide(offline_settings):
+    from deck_agent.nodes.router import route
+
+    st = _with_deck("tidy up the third one")          # requested_route is None: POST /ask
+    model = _Model({"route": "edit", "slides": [3], "confidence": 0.9})
+    assert route(st, planner=model)["route_by"] == "model" and len(model.calls) == 1
+
+
+def test_a_new_turn_forgets_the_last_turns_endpoint():
+    from deck_agent.state import turn_reset
+
+    assert turn_reset("anything", "r2", 2)["requested_route"] is None

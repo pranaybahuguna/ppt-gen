@@ -1,6 +1,8 @@
 """route - decide what this request is, before spending anything on it.
 
-A model decides. People say the same thing in too many ways ("tidy up the third one", "make it
+The caller decides first: a request that came through the create, edit or translate endpoint
+(or command) IS that route, and no model is asked. Only the general "ask" entry point - and an
+attached deck with an instruction - leaves the decision open. Then a model decides. People say the same thing in too many ways ("tidy up the third one", "make it
 pop", "can you do this one in German") for word lists to keep up, and a wrong route is the
 costliest mistake the graph can make: it rebuilds or rewrites the wrong thing.
 
@@ -58,8 +60,8 @@ def route(state: DeckState, planner=None) -> dict:
 
     Graph node. Runs: after intake on every turn, and again after ask once the person has
         answered.
-    Reads: instruction, slide_scope, target_lang, trace (to count questions already asked), and
-        a summary of the session (is there a deck).
+    Reads: requested_route (the caller's endpoint, when it chose one), instruction, slide_scope,
+        target_lang, trace (to count questions already asked), and a summary of the session.
     Writes: route, route_reason, route_confidence, route_by, target_lang, slide_scope, palette;
         pending_question when it has to ask.
     Next: after_route -> gather (create) | split (edit) | translate_plan | ask | decline.
@@ -70,7 +72,19 @@ def route(state: DeckState, planner=None) -> dict:
     context = summarise(state)
 
     guess, by = None, "model"
-    if planner is not None and hasattr(planner, "route"):
+    requested = state.get("requested_route")
+    if requested in ("create", "edit", "translate"):
+        # The caller already said what this is (the edit endpoint, `deckops edit`, ...): no model
+        # call, and no second-guessing it. Only the facts are checked - an edit needs a deck.
+        guess = checked({"route": requested, "confidence": 1.0, "slides": state.get("slide_scope") or [],
+                         "target_lang": state.get("target_lang"),
+                         "reason": f"the caller asked for {requested}"}, context)
+        by = "caller"
+        if guess["route"] != requested:        # e.g. edit with no deck: asking cannot fix that
+            return {"route": "decline", "route_by": by, "route_confidence": 1.0,
+                    "route_reason": f"cannot {requested}: {guess['question']}",
+                    "trace": [step("route", route="decline", by=by, confidence=1.0)]}
+    elif planner is not None and hasattr(planner, "route"):
         by = getattr(planner, "routes_by", "model")
         try:
             guess = checked(planner.route(instruction, context) or {}, context)

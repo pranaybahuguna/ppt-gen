@@ -87,6 +87,8 @@ class DeckState(TypedDict, total=False):
     route_confidence: float | None
     route_by: str | None            # "rules" or "model" - worth knowing when a route is wrong
     target_lang: str | None
+    requested_route: str | None     # the route the caller chose by its endpoint (create / edit /
+                                    # translate); None for "ask", where the router decides
     slide_scope: list[int] | None   # 1-based slide numbers the request is about; None = all
 
     # ---- the deck ------------------------------------------------------------------
@@ -154,7 +156,7 @@ def new_state(thread_id: str, instruction: str, **kw: Any) -> DeckState:
         "vision_notes": [],
         "repair_round": 0, "extra_ops": [],
         "approved": {}, "changelog": [], "trace": [], "errors": [],
-        "pending_question": None, "answer": None, "delivered": None,
+        "pending_question": None, "answer": None, "delivered": None, "requested_route": None,
     }
     base.update(kw)  # type: ignore[typeddict-item]
     return base
@@ -179,7 +181,7 @@ def turn_reset(instruction: str, run_id: str, turn: int, **kw) -> dict:
         "changed": [], "revise": [], "audited": False,
         "findings": [], "structural": [], "leaked": [], "previews": [], "vision_notes": [],
         "repair_round": 0, "extra_ops": [], "changelog": [], "pending_question": None, "answer": None,
-        "delivered": None, "slide_scope": None, "target_lang": None,
+        "delivered": None, "slide_scope": None, "target_lang": None, "requested_route": None,
         # errors belong to the turn that produced them, not to the session
         "errors": CLEAR,
         **kw,

@@ -176,7 +176,7 @@ def create_deck(deck_id: str, brief: str, content_pack: dict | None = None,
     Called by: cli.cmd_create; tests/demo.py.
     """
     return _invoke(deck_id, {"instruction": brief, "content_pack": content_pack,
-                             "template": template, "route": None,
+                             "template": template, "requested_route": "create",
                              "context_docs": list(context or []),
                              "attachments": [a for a in [template] if a], **kw},
                    planner, log)
@@ -187,7 +187,7 @@ def edit_deck(deck_id: str, instruction: str, planner=None, log=print, **kw) -> 
 
     Called by: cli.cmd_edit; tests/demo.py.
     """
-    return _invoke(deck_id, {"instruction": instruction, **kw}, planner, log)
+    return _invoke(deck_id, {"instruction": instruction, "requested_route": "edit", **kw}, planner, log)
 
 
 def translate_deck(deck_id: str, lang: str, slides: list[int] | None = None,
@@ -197,7 +197,7 @@ def translate_deck(deck_id: str, lang: str, slides: list[int] | None = None,
     Called by: cli.cmd_translate; tests/demo.py.
     """
     return _invoke(deck_id, {"instruction": f"translate into {lang}", "target_lang": lang,
-                             "slide_scope": slides, "route": "translate", **kw}, planner, log)
+                             "slide_scope": slides, "requested_route": "translate", **kw}, planner, log)
 
 
 def attach_deck(deck_id: str, deck_uri: str, instruction: str | None = None, planner=None,

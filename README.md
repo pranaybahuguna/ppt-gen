@@ -242,7 +242,11 @@ storyline, its facts and its palette stay.
 (it is untrusted input) and sorts attachments: a deck to work on becomes `source_deck`; a
 template becomes `template`.
 
-**2. `route`** - decides what the request is. A model reads every request (the request plus a
+**2. `route`** - decides what the request is. **When the caller already said** - the create,
+edit or translate endpoint (or `deckops create/edit/translate`, or the matching MCP tool) - that
+*is* the route: no model is asked and nothing overrides it (`route_by: "caller"`). Only the facts
+are checked: an edit or a translation of a deck id that has no deck yet is declined, saying so.
+Through `POST /decks/{id}/ask` (and an attached deck with an instruction), a model reads the request (the request plus a
 short summary of the session - is there a deck, a template - never the conversation), because
 people say the same thing in too many ways for word lists: "tidy up the third one", "can you do
 this one in German", "make it pop".
@@ -261,8 +265,8 @@ language. The same call says whether the request asked for more colour (`palette
 is unsure (confidence under `router_confidence_floor`, 0.6) the graph stops and asks you (`ask`,
 a LangGraph interrupt) - at most twice, then it declines. The old word lists
 (`llm.planner.rules_route`) route only offline (the stub planner) or when the model call fails.
-Out: `route`, `route_reason`, `route_by` ("model" or "rules"), `slide_scope`, `target_lang`,
-`palette`.
+Out: `route`, `route_reason`, `route_by` ("caller", "model" or "rules"), `slide_scope`,
+`target_lang`, `palette`.
 
 ### Create: from context to a finished deck
 
