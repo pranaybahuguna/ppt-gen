@@ -7,7 +7,8 @@ one people have already edited by hand.
 **New here? Read the walkthrough first:** [docs/deckops-walkthrough.md](docs/deckops-walkthrough.md)
 follows one create and one edit request through every step of the graph, with which prompt each
 step sends and when, and every prompt in full. A styled version is in
-[docs/deckops-walkthrough.html](docs/deckops-walkthrough.html) (open it in a browser).
+[docs/deckops-walkthrough.html](docs/deckops-walkthrough.html) (open it in a browser). A shorter, simpler first version is kept
+in [docs/v0.1/](docs/v0.1/deckops-walkthrough.md).
 
 ```
 "a deck explaining this, for engineers" + notes.md       → create

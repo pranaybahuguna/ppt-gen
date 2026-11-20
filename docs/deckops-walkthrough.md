@@ -1,6 +1,8 @@
 # One request, step by step
 
 > Also as a page with styling: [deckops-walkthrough.html](deckops-walkthrough.html) (open it in a browser). The prompt texts below are copied from `src/deck_agent/llm/prompts.py`, `design/prompts.py` and `revise/prompts.py`; the user messages and answers are the real shapes with example values.
+>
+> A shorter, simpler earlier version is in [v0.1/deckops-walkthrough.md](v0.1/deckops-walkthrough.md).
 
 This follows one example through the whole LangGraph flow of deckops: first a new deck is created (steps C1–C10), then the same deck is edited (steps E1–E8). Every step says what it is given, what it does, what it hands on, and **which prompt it sends to the model, and when**. The full prompts are at the end, each linked back to the steps that use it.
 
