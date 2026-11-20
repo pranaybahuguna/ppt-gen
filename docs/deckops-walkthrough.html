@@ -1,0 +1,1066 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Deckops Request Walkthrough</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&family=Space+Grotesk:wght@500;600;700&display=swap">
+<style>
+/* Layout: one reading column; each step is a numbered row (the numbers ARE the run order) with In / Does / Out panels. */
+:root {
+  --bg: #f6f7f9; --surface: #ffffff; --fg: #18202b; --muted: #5b6676; --line: #dde2e9;
+  --accent: #00897b; --accent-soft: #e0f2ef; --model: #6a4bc4; --model-soft: #eeeafb;
+  --code: #2f6db5; --code-soft: #e5eefa; --vision: #b5651d; --vision-soft: #fbefe3;
+  --codebg: #f0f2f5;
+  --display: "Space Grotesk", "Segoe UI", system-ui, sans-serif;
+  --body: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #11161d; --surface: #18202a; --fg: #e6eaf0; --muted: #9aa6b6; --line: #2a3442;
+  --accent: #3cc4b3; --accent-soft: #15302d; --model: #a993f0; --model-soft: #262041;
+  --code: #79aef0; --code-soft: #172a40; --vision: #e8a565; --vision-soft: #35261a; --codebg: #0f141a;
+  color-scheme: dark } }
+:root[data-theme="dark"] {
+  --bg: #11161d; --surface: #18202a; --fg: #e6eaf0; --muted: #9aa6b6; --line: #2a3442;
+  --accent: #3cc4b3; --accent-soft: #15302d; --model: #a993f0; --model-soft: #262041;
+  --code: #79aef0; --code-soft: #172a40; --vision: #e8a565; --vision-soft: #35261a; --codebg: #0f141a;
+  color-scheme: dark }
+body { background: var(--bg); color: var(--fg); font: 15px/1.6 var(--body); }
+.wrap { max-width: 920px; margin: 0 auto; padding-block: 40px 80px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+h1, h2, h3 { font-family: var(--display); line-height: 1.2; text-wrap: balance; margin: 0; }
+h1 { font-size: 2.1rem; font-weight: 700; }
+h2 { font-size: 1.45rem; font-weight: 600; margin-top: 56px; padding-top: 18px; border-top: 1px solid var(--line); }
+h3 { font-size: 1.12rem; font-weight: 600; }
+p { margin: 0; max-width: 68ch; }
+.lede { color: var(--muted); font-size: 1.05rem; margin-top: 10px; }
+.stack { display: flex; flex-direction: column; gap: 14px; }
+.section-intro { margin-top: 12px; display: flex; flex-direction: column; gap: 10px; }
+code { font-family: var(--mono); font-size: 0.86em; background: var(--codebg); padding: 1px 5px; border-radius: 4px; }
+pre { font-family: var(--mono); font-size: 12.5px; line-height: 1.5; background: var(--codebg); border: 1px solid var(--line);
+  border-radius: 8px; padding: 12px 14px; margin: 0; overflow-x: auto; white-space: pre; }
+pre code { background: none; padding: 0; font-size: inherit; }
+.example { margin-top: 18px; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px;
+  display: flex; flex-direction: column; gap: 10px; }
+.label { font: 600 11px/1 var(--body); letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+.legend { display: flex; flex-wrap: wrap; gap: 10px 18px; margin-top: 14px; font-size: 13.5px; color: var(--muted); }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.tag { display: inline-block; font: 600 11px/1 var(--body); letter-spacing: 0.04em; padding: 4px 7px; border-radius: 4px; white-space: nowrap; }
+.t-model { background: var(--model-soft); color: var(--model); }
+.t-code { background: var(--code-soft); color: var(--code); }
+.t-vision { background: var(--vision-soft); color: var(--vision); }
+.t-par { background: var(--accent-soft); color: var(--accent); }
+.step { display: grid; grid-template-columns: 44px minmax(0, 1fr); gap: 14px; margin-top: 26px; }
+.num { font: 700 1.05rem/1 var(--display); color: var(--accent); border: 2px solid var(--accent); border-radius: 50%;
+  width: 40px; height: 40px; display: grid; place-items: center; font-variant-numeric: tabular-nums; }
+.body { min-width: 0; display: flex; flex-direction: column; gap: 10px; }
+.head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; }
+.head h3 code { font-size: 0.95em; }
+.where { font: 12.5px var(--mono); color: var(--muted); }
+.panels { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; min-width: 0;
+  display: flex; flex-direction: column; gap: 6px; font-size: 14px; }
+.panel ul { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 3px; }
+.why { font-size: 14px; color: var(--muted); border-left: 3px solid var(--line); padding-left: 12px; max-width: 72ch; }
+.why b { color: var(--fg); font-weight: 600; }
+details { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; }
+details > summary { cursor: pointer; padding: 9px 12px; font-size: 13.5px; font-weight: 500; color: var(--muted); }
+details > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+details[open] > summary { border-bottom: 1px solid var(--line); }
+details > div { padding: 12px; display: flex; flex-direction: column; gap: 10px; }
+.diagram { margin-top: 18px; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 12px; overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 14px; }
+.tablewrap { overflow-x: auto; margin-top: 14px; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; }
+th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font: 600 12px var(--body); letter-spacing: 0.05em; text-transform: uppercase; color: var(--muted); }
+tr:last-child td { border-bottom: 0; }
+.fan { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.fan div { background: var(--accent-soft); border-radius: 6px; padding: 8px 10px; font-size: 13px; min-width: 0; }
+.fan b { font-family: var(--mono); font-weight: 500; }
+.promptlink { font: 500 12.5px var(--body); color: var(--accent); text-decoration: none; border-bottom: 1px solid currentColor; }
+.promptlink:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+a { color: var(--accent); }
+.call { margin-top: 22px; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px;
+  display: flex; flex-direction: column; gap: 10px; scroll-margin-top: 16px; min-width: 0; }
+.callnum { font: 700 0.95rem/1 var(--display); color: var(--model); background: var(--model-soft); border-radius: 6px; padding: 6px 8px; font-variant-numeric: tabular-nums; }
+.callwhen, .then { font-size: 14px; max-width: 76ch; }
+.then { color: var(--muted); } .then b, .callwhen b { color: var(--fg); font-weight: 600; }
+.call details { background: var(--bg); }
+.io { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.iobox { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+pre.prompt { white-space: pre-wrap; word-break: break-word; max-height: 460px; overflow-y: auto; font-size: 12px; background: var(--surface); }
+h3.sub { margin-top: 34px; }
+@media (max-width: 720px) { .io { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 720px) {
+  .panels, .fan { grid-template-columns: minmax(0, 1fr); }
+  .step { grid-template-columns: minmax(0, 1fr); }
+  h1 { font-size: 1.7rem; }
+}
+
+.chip { display: inline-flex; align-items: center; gap: 6px; font: 500 12.5px var(--mono); padding: 4px 8px;
+  border-radius: 6px; background: var(--model-soft); color: var(--model); text-decoration: none; white-space: nowrap; }
+.chip:hover, .chip:focus-visible { outline: 2px solid var(--model); outline-offset: 1px; }
+.chip.v { background: var(--vision-soft); color: var(--vision); }
+.chip.v:hover, .chip.v:focus-visible { outline-color: var(--vision); }
+.prompts { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; font-size: 13.5px; color: var(--muted); }
+.prompts b { color: var(--fg); font-weight: 600; }
+.stepid { font: 700 0.95rem/1 var(--display); color: var(--accent); border: 2px solid var(--accent); border-radius: 8px;
+  min-width: 44px; height: 40px; display: grid; place-items: center; font-variant-numeric: tabular-nums; padding: 0 4px; }
+.step { grid-template-columns: 52px minmax(0, 1fr); }
+.step.loop .stepid { color: var(--vision); border-color: var(--vision); }
+.branch { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.branch > div { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px;
+  display: flex; flex-direction: column; gap: 6px; min-width: 0; font-size: 14px; }
+.branch h4 { margin: 0; font: 600 0.98rem/1.25 var(--display); }
+.branch .when { color: var(--muted); }
+.used { font-size: 13.5px; color: var(--muted); display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; }
+.used a { font-weight: 600; }
+.call { scroll-margin-top: 16px; }
+.step { scroll-margin-top: 16px; }
+.call { margin-top: 22px; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px;
+  display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.callnum { font: 700 0.95rem/1 var(--display); color: var(--model); background: var(--model-soft); border-radius: 6px; padding: 6px 8px; }
+.callwhen, .then { font-size: 14px; max-width: 76ch; }
+.then { color: var(--muted); } .then b, .callwhen b { color: var(--fg); font-weight: 600; }
+.call details { background: var(--bg); }
+.io { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.iobox { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+pre.prompt { white-space: pre-wrap; word-break: break-word; max-height: 460px; overflow-y: auto; font-size: 12px; background: var(--surface); }
+a { color: var(--accent); }
+.toc { display: flex; flex-wrap: wrap; gap: 8px 16px; margin-top: 14px; font-size: 14px; }
+@media (max-width: 720px) { .io, .branch { grid-template-columns: minmax(0, 1fr); } .step { grid-template-columns: minmax(0, 1fr); } }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>One request, step by step</h1>
+  <p class="lede">This follows one example through the whole LangGraph flow of deckops: first a new deck is created (steps C1–C10), then the same deck is edited (steps E1–E8). Every step says what it is given, what it does, what it hands on, and <b>which prompt it sends to the model, and when</b>. The full prompts are at the end, each linked back to the steps that use it.</p>
+  <div class="legend">
+    <span><span class="tag t-model">MODEL</span> a model call (text)</span>
+    <span><span class="tag t-vision">VISION</span> a model call with pictures of slides</span>
+    <span><span class="tag t-code">CODE</span> plain Python, no model</span>
+    <span><span class="tag t-par">PARALLEL</span> many copies at once</span>
+    <span><a class="chip" href="#p-route">PROMPT</a> click a prompt name to see it</span>
+  </div>
+  <div class="example">
+    <span class="label">The example</span>
+    <p><b>Create:</b> <code>POST /decks</code> with “Make a deck for the architecture review on scaling OTKR”, your notes <code>otkr-notes.md</code>, and <code>Architecture_Scaling.pptx</code> as the template.</p>
+    <p><b>Edit, same conversation:</b> <code>POST /decks/otkr/edit</code> with “make slide 3 more visual and fix the typo on slide 6”.</p>
+  </div>
+  <nav class="toc"><a href="#map">The map</a><a href="#who-draws">When code is used</a><a href="#which">Which prompt, when</a><a href="#create">Create, C1–C10</a><a href="#edit">Edit, E1–E8</a><a href="#prompts">All prompts</a><a href="#langgraph">LangGraph pieces</a></nav>
+
+
+  <h2 id="map">The map</h2>
+  <div class="section-intro"><p>One LangGraph <code>StateGraph</code>. Boxes are nodes (Python functions); the text under a node name is the prompt it sends. Dashed arrows are loops that send slides back for another pass. The edit route's <code>work</code> node is drawn open, because it uses a different prompt for each kind of task.</p></div>
+  <div class="diagram">
+<pre class="mermaid">
+flowchart TD
+  start([request]) --> intake["intake<br/><i>code</i>"] --> route["route<br/><i>endpoint decides;<br/>ROUTE_SYSTEM only for /ask</i>"]
+  route -->|create| gather["gather<br/><i>GATHER_SYSTEM × pieces of context</i>"]
+  gather --> storyline["storyline<br/><i>STORYLINE_SYSTEM</i>"] --> approve["approve_outline<br/><i>optional pause</i>"]
+  approve -->|"Send × content slides"| write["write<br/><i>SPEC_SYSTEM, one per slide</i>"]
+  write --> build["build<br/><i>code: draws the specs</i>"]
+  route -->|edit| split["split<br/><i>SPLIT_SYSTEM</i>"]
+  split -->|"Send × tasks"| work
+  subgraph work ["work: one copy per task"]
+    direction LR
+    wr["redesign / add<br/><i>REDESIGN_SYSTEM</i>"]
+    wt["tweak<br/><i>TWEAK_SYSTEM</i>"]
+    wd["draw<br/><i>DRAW_SYSTEM</i>"]
+    wk["deck<br/><i>DECK_SYSTEM</i>"]
+  end
+  split -->|"delete · move · align_titles<br/>(no model)"| join
+  work --> join["join<br/><i>code: applies everything</i>"]
+  build --> review["review<br/><i>REVIEW_SYSTEM, slides in fours</i>"]
+  join --> review
+  review -.->|"weak slide → work again:<br/>same kind, or redesign → draw"| work
+  review -->|all good, or 3 rounds done| audit["audit<br/><i>code + AUDIT_SYSTEM</i>"]
+  audit -.->|"finding on a slide → tweak"| work
+  audit --> deliver(["deliver"])
+  route -->|translate| tr["translate_plan → apply → look"] --> deliver
+  route -->|unsure / ask| ask["ask<br/><i>pause for your answer</i>"] --> route
+</pre>
+  </div>
+
+  <h3 class="sub" id="who-draws" style="margin-top:30px">When does a slide get custom code? (draw, tweak, deck)</h3>
+  <div class="section-intro"><p>Three steps can send a slide to a code-writing prompt: <b>split</b> (the first pass of an edit), <b>review</b> (a weak slide in the next round) and <b>audit</b> (the deck check). Everything else is drawn with blocks. A <b>new deck never starts with code</b>: its slides are written with SPEC_SYSTEM and reach DRAW_SYSTEM only when review escalates them.</p></div>
+  <div class="diagram">
+<pre class="mermaid">
+flowchart LR
+  S["<b>split</b><br/>first pass of an edit"]
+  RV["<b>review</b><br/>a weak slide, next round"]
+  AU["<b>audit</b><br/>the deck check"]
+  TW["<b>tweak</b><br/>TWEAK_SYSTEM<br/>edit the slide in place"]
+  DR["<b>draw</b><br/>DRAW_SYSTEM<br/>redraw the content area"]
+  DK["<b>deck</b><br/>DECK_SYSTEM<br/>one code for many slides"]
+  S -->|"small change, design stays"| TW
+  S -->|"a visual blocks can't make"| DR
+  S -->|"same rule on many slides"| DK
+  RV -->|"weak tweak"| TW
+  RV -->|"weak redesign + redo_with: custom_drawing"| DR
+  RV -->|"weak draw"| DR
+  RV -->|"weak deck task"| DK
+  AU -->|"a finding on any slide"| TW
+</pre>
+  </div>
+  <div class="tablewrap"><table>
+    <tr><th>Code prompt</th><th>Called when</th><th>Decided by</th><th>Step</th></tr>
+    <tr><td><a class="chip v" href="#p-draw">DRAW_SYSTEM</a></td><td>the edit asks for a visual the blocks can't make</td><td><code>split</code></td><td><a href="#s-e3">E3</a></td></tr>
+    <tr><td><a class="chip v" href="#p-draw">DRAW_SYSTEM</a></td><td>a redesigned or newly written slide is weak, and the reviewer says the blocks can't do it (<code>redo_with: "custom_drawing"</code>)</td><td><code>review</code></td><td><a href="#s-c8">C8</a> · <a href="#s-e6">E6</a></td></tr>
+    <tr><td><a class="chip v" href="#p-draw">DRAW_SYSTEM</a></td><td>a drawn slide is weak: drawn again with the notes</td><td><code>review</code></td><td><a href="#s-e6">E6</a></td></tr>
+    <tr><td><a class="chip v" href="#p-tweak">TWEAK_SYSTEM</a></td><td>the edit asks for a small change that keeps the design</td><td><code>split</code></td><td><a href="#s-e3">E3</a></td></tr>
+    <tr><td><a class="chip v" href="#p-tweak">TWEAK_SYSTEM</a></td><td>a tweaked slide is weak: tweaked again with the notes</td><td><code>review</code></td><td><a href="#s-e6">E6</a></td></tr>
+    <tr><td><a class="chip v" href="#p-tweak">TWEAK_SYSTEM</a></td><td>the deck check finds a problem on any slide (create or edit)</td><td><code>audit</code></td><td><a href="#s-c9">C9</a> · <a href="#s-e7">E7</a></td></tr>
+    <tr><td><a class="chip v" href="#p-deck">DECK_SYSTEM</a></td><td>the edit asks for the same change on many slides; again if review finds the samples weak</td><td><code>split</code>, then <code>review</code></td><td><a href="#s-e3">E3</a></td></tr>
+  </table></div>
+  <p style="margin-top:12px">In LangGraph terms: <code>split</code> writes the kind into each task; <code>after_split</code>, <code>after_review</code> and <code>after_audit</code> each return one <code>Send("work", {task, feedback})</code> per task; inside <code>work</code>, plain Python picks the prompt from <code>task["kind"]</code> (<code>revise/nodes.py</code> calls <code>tweak</code> for tweak and draw, <code>deck_change</code> for deck, <code>redesign</code> otherwise; <code>revise/work.py</code> then calls <code>draw_slide</code> or <code>tweak_slide</code>).</p>
+
+<h2 id="which">Which prompt, at which step, when</h2>
+<div class="section-intro"><p>Eleven prompts. Four of them belong to the edit route's <code>work</code> node, and which one runs depends on the task kind that <code>split</code>, <code>review</code> or <code>audit</code> gave the slide.</p></div>
+<div class="tablewrap"><table><tr><th>Prompt</th><th>Step</th><th>Node</th><th>Used when</th><th>How many calls</th></tr>
+<tr><td><a class="chip" href="#p-route">ROUTE_SYSTEM</a></td><td><a href="#s-c2 / e1">C2 / E1</a></td><td><code>route</code></td><td>Only for <code>POST /decks/{id}/ask</code> (and attach). The create, edit and translate endpoints decide the route themselves: no model call.</td><td>once</td></tr>
+<tr><td><a class="chip" href="#p-gather">GATHER_SYSTEM</a></td><td><a href="#s-c3">C3</a></td><td><code>gather</code></td><td>Create, unless you supplied a content pack.</td><td>one per piece of context (≤ 20,000 characters), threads</td></tr>
+<tr><td><a class="chip" href="#p-story">STORYLINE_SYSTEM</a></td><td><a href="#s-c4">C4</a></td><td><code>storyline</code></td><td>Create. Once, plus one revision if code finds problems with the plan.</td><td>once</td></tr>
+<tr><td><a class="chip" href="#p-spec">SPEC_SYSTEM</a></td><td><a href="#s-c6">C6</a></td><td><code>write</code></td><td>Create. Every content slide.</td><td>one per slide (Send), up to 3 tries each</td></tr>
+<tr><td><a class="chip" href="#p-split">SPLIT_SYSTEM</a></td><td><a href="#s-e2">E2</a></td><td><code>split</code></td><td>Edit. Every edit request.</td><td>once</td></tr>
+<tr><td><a class="chip v" href="#p-redesign">REDESIGN_SYSTEM</a></td><td><a href="#s-e3">E3</a></td><td><code>work</code></td><td>Task kind <b>redesign</b> or <b>add</b>: split chose it (“more visual”, “add a slide on…”), or review sent a redesigned slide back as weak.</td><td>one per task (Send), up to 3 tries</td></tr>
+<tr><td><a class="chip v" href="#p-tweak">TWEAK_SYSTEM</a></td><td><a href="#s-e3">E3</a> · <a href="#s-e7">E7</a></td><td><code>work</code></td><td>Task kind <b>tweak</b>: split chose it for a small change that keeps the design (a typo, a colour, a label size); review sent a tweak back; or <b>the deck check</b> found a problem on a slide (E7).</td><td>one per task (Send), up to 3 tries</td></tr>
+<tr><td><a class="chip v" href="#p-draw">DRAW_SYSTEM</a></td><td><a href="#s-e3">E3</a> · <a href="#s-e6">E6</a></td><td><code>work</code></td><td>Task kind <b>draw</b>: split chose it for a visual the blocks cannot make (arrows, icons, a cycle, a funnel, a bespoke diagram); or <b>review answered <code>redo_with: custom_drawing</code></b> for a redesigned slide (E6).</td><td>one per task (Send), up to 3 tries</td></tr>
+<tr><td><a class="chip v" href="#p-deck">DECK_SYSTEM</a></td><td><a href="#s-e3">E3</a></td><td><code>work</code></td><td>Task kind <b>deck</b>: split chose it for the same rule on many slides (“every chart label 12pt”).</td><td>one per deck task, up to 3 tries</td></tr>
+<tr><td><a class="chip v" href="#p-review">REVIEW_SYSTEM</a></td><td><a href="#s-c8">C8</a> · <a href="#s-e5">E5</a> · <a href="#s-e6">E6</a></td><td><code>review</code></td><td>After every build or join, for the slides that were made or changed, while revision rounds are left (3).</td><td>batches of 4 slides, threads</td></tr>
+<tr><td><a class="chip" href="#p-audit">AUDIT_SYSTEM</a></td><td><a href="#s-c9">C9</a> · <a href="#s-e7">E7</a></td><td><code>audit</code></td><td>Once per request, after review.</td><td>once</td></tr>
+</table></div>
+<h2 id="create">Create: a new deck (C1–C10)</h2>
+<div class="step" id="s-c1"><div class="stepid">C1</div><div class="body">
+    <div class="head"><h3><code>intake</code></h3><span class="tag t-code">CODE</span><span class="where">nodes/intake.py</span></div>
+    <div class="prompts"><b>Prompt:</b> none. </div><div class="panels"><div class="panel"><span class="label">In</span><p>Your files, already stored by the server under <code>uploads/</code>.</p></div><div class="panel"><span class="label">Does</span><ul><li>gives the request a <code>run_id</code></li><li>checks each file is a real, safe .pptx before anything opens it</li><li>sorts them: a deck to change → <code>source_deck</code>; a template → <code>template</code></li></ul></div><div class="panel"><span class="label">Out</span><p><code>template</code> set; no <code>source_deck</code>.</p></div></div>
+  </div></div>
+<div class="step" id="s-c2"><div class="stepid">C2</div><div class="body">
+    <div class="head"><h3><code>route</code></h3><span class="tag t-code">CODE</span><span class="where">nodes/router.py</span></div>
+    <div class="prompts"><b>Prompt:</b> <a class="chip" href="#p-route">ROUTE_SYSTEM</a> not used here: you called <code>POST /decks</code>, so the route is <b>create</b> with no model call (<code>route_by: "caller"</code>). The prompt runs only for requests sent to <code>/ask</code>.</div><div class="panels"><div class="panel"><span class="label">In</span><p>The endpoint's route (<code>requested_route</code>), your words, a short summary of the session.</p></div><div class="panel"><span class="label">Does</span><p>Endpoint route: checks only the facts (an edit needs a deck). <code>/ask</code>: the model picks create, edit, translate, ask or decline; code checks the answer; low confidence → ask you.</p></div><div class="panel"><span class="label">Out</span><p><code>route = "create"</code>, <code>route_reason</code>, <code>route_by</code>.</p></div></div>
+  </div></div>
+<div class="step" id="s-c3"><div class="stepid">C3</div><div class="body">
+    <div class="head"><h3><code>gather</code>: what the deck may say</h3><span class="tag t-model">MODEL</span><span class="tag t-par">THREADS</span><span class="where">nodes/gather.py</span></div>
+    <div class="prompts"><b>Prompt:</b> <a class="chip" href="#p-gather">GATHER_SYSTEM</a> one call per piece of your documents (long ones are cut at headings into ≤ 20,000-character pieces); up to 4 at once.</div><div class="panels"><div class="panel"><span class="label">In</span><p>Your request and your notes.</p></div><div class="panel"><span class="label">Does</span><ul><li>the model returns facts, each with the exact words that support it (<code>quote</code>)</li><li>code searches your notes for every quote; facts whose quote is not there are dropped</li><li>fewer than 3 facts → asks you for more</li></ul></div><div class="panel"><span class="label">Out</span><p><code>content_pack</code>: facts F1, F2 …, datasets, gaps. Saved as <code>content_pack.json</code>, <code>gather_report.json</code>.</p></div></div><p class="why"><b>Why:</b> every number later on a slide must come from a fact, and every fact from a line in your notes.</p>
+  </div></div>
+<div class="step" id="s-c4"><div class="stepid">C4</div><div class="body">
+    <div class="head"><h3><code>storyline</code>: the argument, before any slide</h3><span class="tag t-model">MODEL</span><span class="tag t-code">CODE</span><span class="where">design/nodes.py · design/plan.py</span></div>
+    <div class="prompts"><b>Prompt:</b> <a class="chip" href="#p-story">STORYLINE_SYSTEM</a> once; a second call only if code finds problems with the plan.</div><div class="panels"><div class="panel"><span class="label">In</span><p>The request, all facts (id and text), datasets, how many slides (default 8–12).</p></div><div class="panel"><span class="label">Does</span><ul><li>the model plans: title, sections, and per content slide an action title, its job, a visual type, the facts it uses</li><li>code checks the plan; problems go back once</li><li>code adds the cover and section dividers (no prompt)</li></ul></div><div class="panel"><span class="label">Out</span><p><code>story</code>, <code>deck_frame</code>, <code>storyline.json</code>.</p></div></div>
+  </div></div>
+<div class="step" id="s-c5"><div class="stepid">C5</div><div class="body">
+    <div class="head"><h3><code>approve_outline</code> (off by default)</h3><span class="tag t-code">CODE</span><span class="where">design/nodes.py</span></div>
+    <div class="prompts"><b>Prompt:</b> none. When switched on, the graph pauses (LangGraph <code>interrupt()</code>) with the list of titles and waits for your “yes”.</div>
+  </div></div>
+<div class="step" id="s-c6"><div class="stepid">C6</div><div class="body">
+    <div class="head"><h3><code>write</code> ×N: one writer per slide</h3><span class="tag t-model">MODEL</span><span class="tag t-par">PARALLEL</span><span class="where">design/nodes.py · design/plan.py</span></div>
+    <div class="prompts"><b>Prompt:</b> <a class="chip" href="#p-spec">SPEC_SYSTEM</a> one call per content slide, all at once; up to 3 tries per slide.</div><p>After C5, a routing function returns one <code>Send("write", payload)</code> per content slide. LangGraph runs that many copies of <code>write</code> at the same time; each gets only its own slide's plan and facts.</p><div class="panels"><div class="panel"><span class="label">In</span><p>Deck title, sections and all slide titles; this slide's plan; <b>only its own facts</b>; its dataset; allowed colours.</p></div><div class="panel"><span class="label">Does</span><ul><li>the model writes a <b>slide spec</b>: words + building blocks on a 12-column grid, no positions</li><li>code checks it: limits, numbers against the facts, a test drawing that measures every word</li><li>problems go back as feedback</li></ul></div><div class="panel"><span class="label">Out</span><p><code>slide_specs</code> (+1 per copy; a reducer collects them all).</p></div></div><p class="why"><b>Why:</b> slides don't depend on each other once the storyline exists, so they are written together; the model chooses words and blocks, code does all positions.</p>
+  </div></div>
+<div class="step" id="s-c7"><div class="stepid">C7</div><div class="body">
+    <div class="head"><h3><code>build</code>: draw the deck</h3><span class="tag t-code">CODE</span><span class="where">design/render.py · design/pieces.py · design/chrome.py</span></div>
+    <div class="prompts"><b>Prompt:</b> none. Runs once every <code>write</code> copy has finished. Draws each spec on your template with python-pptx, in the agent's own process (no container). A picture of every slide is then rendered (LibreOffice, in the container).</div><div class="panels"><div class="panel"><span class="label">In</span><p>The frame and all specs; your template.</p></div><div class="panel"><span class="label">Does</span><p>Template look (header, footer, cover, fonts, colours) + each spec's blocks placed on the grid, every text measured to fit.</p></div><div class="panel"><span class="label">Out</span><p><code>v001.pptx</code>; pictures; every content slide listed as <code>changed</code> so review looks at all of them.</p></div></div>
+  </div></div>
+<div class="step" id="s-c8"><div class="stepid">C8</div><div class="body">
+    <div class="head"><h3><code>review</code></h3><span class="tag t-vision">VISION</span><span class="tag t-par">THREADS</span><span class="where">revise/nodes.py</span></div>
+    <div class="prompts"><b>Prompt:</b> <a class="chip v" href="#p-review">REVIEW_SYSTEM</a> slides in groups of 4, up to 4 groups at once. Exactly as in the edit route: see <a href="#s-e5">E5</a> and <a href="#s-e6">E6</a>.</div><p>On a new deck there is no “before” picture. Weak slides go back to <code>work</code> as <b>redesign</b> tasks (<a href="#p-redesign">REDESIGN_SYSTEM</a>), or as <b>draw</b> tasks (<a href="#p-draw">DRAW_SYSTEM</a>) when the reviewer says the blocks can't do it. <b>This is the only way a new deck reaches model-written code.</b></p>
+  </div></div>
+<div class="step" id="s-c9"><div class="stepid">C9</div><div class="body">
+    <div class="head"><h3><code>audit</code>: the whole deck once more</h3><span class="tag t-code">CODE</span><span class="tag t-model">MODEL</span><span class="where">revise/nodes.py · revise/audit.py</span></div>
+    <div class="prompts"><b>Prompt:</b> <a class="chip" href="#p-audit">AUDIT_SYSTEM</a> one text-only call per request. Findings go back as <b>tweak</b> tasks: see <a href="#s-e7">E7</a>.</div>
+  </div></div>
+<div class="step" id="s-c10"><div class="stepid">C10</div><div class="body">
+    <div class="head"><h3><code>deliver</code></h3><span class="tag t-code">CODE</span><span class="where">nodes/deliver.py</span></div>
+    <div class="prompts"><b>Prompt:</b> none. Writes <code>manifest.json</code> and returns the deck. In-between versions from review rounds are deleted: one request = one version.</div>
+  </div></div>
+<h2 id="edit">Edit: change slides of that deck (E1–E8)</h2>
+<div class="section-intro"><p>Same conversation, so LangGraph loads the saved state: the deck is <code>v001</code>, its template and facts are known. The previous request's tasks and notes are cleared. <code>intake</code> runs again first.</p></div>
+<div class="step" id="s-e1"><div class="stepid">E1</div><div class="body">
+    <div class="head"><h3><code>route</code></h3><span class="tag t-code">CODE</span><span class="where">nodes/router.py</span></div>
+    <div class="prompts"><b>Prompt:</b> <a class="chip" href="#p-route">ROUTE_SYSTEM</a> not used: you called <code>/decks/otkr/edit</code>, so the route is <b>edit</b>. Through <code>/ask</code> the model would get the session summary and answer “edit”.</div>
+  </div></div>
+<div class="step" id="s-e2"><div class="stepid">E2</div><div class="body">
+    <div class="head"><h3><code>split</code>: the request becomes tasks</h3><span class="tag t-model">MODEL</span><span class="tag t-code">CODE</span><span class="where">revise/nodes.py · revise/read.py</span></div>
+    <div class="prompts"><b>Prompt:</b> <a class="chip" href="#p-split">SPLIT_SYSTEM</a> once per edit request. It decides the <b>task kind</b> of each slide, and so which prompt <code>work</code> uses in E3.</div><div class="panels"><div class="panel"><span class="label">In</span><p>Your words exactly, and a one-line outline of every slide read from the .pptx (role, title, first 40 words, charts, tables). No pictures.</p></div><div class="panel"><span class="label">Does</span><ul><li>the model writes one task per slide wherever possible, choosing its kind</li><li>code drops tasks for slides that don't exist; deck-wide tasks get content slides only</li><li>your own words are attached to every task (<code>person_asked</code>)</li></ul></div><div class="panel"><span class="label">Out</span><p><code>edit_tasks</code>, <code>work_base</code> (v001).</p></div></div><pre><code>{&quot;tasks&quot;: [{&quot;kind&quot;: &quot;redesign&quot;, &quot;slide&quot;: 3, &quot;instruction&quot;: &quot;Make the slide more visual: lead with the 73% figure ...&quot;},
+           {&quot;kind&quot;: &quot;tweak&quot;,    &quot;slide&quot;: 6, &quot;instruction&quot;: &quot;Correct &#x27;recieve&#x27; to &#x27;receive&#x27; in the second card&quot;}],
+ &quot;summary&quot;: &quot;Slide 3 redesigned; a typo fixed on slide 6&quot;}</code></pre>
+  </div></div>
+<div class="step" id="s-e3"><div class="stepid">E3</div><div class="body">
+    <div class="head"><h3><code>work</code> ×N: one worker per task</h3><span class="tag t-vision">VISION</span><span class="tag t-par">PARALLEL</span><span class="where">revise/nodes.py · revise/work.py</span></div>
+    <div class="prompts"><b>Prompt:</b> depends on the task kind:</div><div class="branch">
+  <div><h4>redesign / add → <a class="chip v" href="#p-redesign">REDESIGN_SYSTEM</a></h4><p class="when">When: the request is about the look, the structure or the kind of visual (“more visual”, “turn this into a chart”), or a new slide.</p><p>The model gets what the slide <b>says</b> and a picture, and writes a new <b>slide spec</b> (blocks, no code). join swaps the slide.</p></div>
+  <div><h4>tweak → <a class="chip v" href="#p-tweak">TWEAK_SYSTEM</a></h4><p class="when">When: a small change that keeps the design (wording, a colour, a font size, one shape). Also every deck-check finding (E7).</p><p>The model gets every <b>shape</b> on the slide and a picture, and writes python-pptx <b>code</b> that edits it in place.</p></div>
+  <div><h4>draw → <a class="chip v" href="#p-draw">DRAW_SYSTEM</a></h4><p class="when">When: a visual the blocks can't make (arrows, icons, a cycle, a funnel, a bespoke diagram); or review escalates a redesigned slide (E6).</p><p>The model gets the shapes, the content, the content area, colours and font, and writes <b>code</b> that redraws the content area.</p></div>
+  <div><h4>deck → <a class="chip v" href="#p-deck">DECK_SYSTEM</a></h4><p class="when">When: the same rule on many slides (“every chart label 12pt”).</p><p>The model gets sample slides (first, middle, last) and writes <b>one</b> piece of <b>code</b> run on every named slide.</p></div>
+</div>
+<p>No model for <code>delete</code>, <code>move</code> and <code>align_titles</code>: they skip <code>work</code> and go straight to <code>join</code>.</p><p><b>How code is run (tweak, draw, deck):</b> the answer is <code>{"code": "def build(prs, ctx): …", "explanation": …}</code>. A static check rejects disallowed imports, files, network and subprocesses; then it runs in a throwaway container (no network, 512 MB, 60 s) on a copy of the deck. Errors, extra slides, or new overflow and overlap go back to the model with its code, up to 3 tries. The worker returns the <b>code</b>, not the deck.</p><p>In our example: two copies at once. <b>t1</b> redesign slide 3 (REDESIGN_SYSTEM) and <b>t2</b> tweak slide 6 (TWEAK_SYSTEM).</p><p class="why"><b>Why:</b> workers never write to the shared deck; each hands back a recipe (a spec or code), and one step applies them all.</p>
+  </div></div>
+<div class="step" id="s-e4"><div class="stepid">E4</div><div class="body">
+    <div class="head"><h3><code>join</code>: apply everything in one pass</h3><span class="tag t-code">CODE</span><span class="where">revise/nodes.py · revise/surgery.py · engine/deck.py</span></div>
+    <div class="prompts"><b>Prompt:</b> none. Runs once all workers are done.</div><ol style="margin:0;padding-left:20px;display:flex;flex-direction:column;gap:4px;max-width:70ch"><li>slide surgery: specs replace or insert slides; deletes and moves</li><li><code>align_titles</code> by fixed code</li><li>each task's <b>code is run again</b> in the container on the merged deck, at the slide's current position</li><li>every slide nobody asked about gets its original bytes back</li></ol><p>Out: <code>v002.pptx</code>, pictures of slides 3 and 6, <code>changed</code>.</p>
+  </div></div>
+<div class="step" id="s-e5"><div class="stepid">E5</div><div class="body">
+    <div class="head"><h3><code>review</code>: look at the changed slides</h3><span class="tag t-vision">VISION</span><span class="tag t-par">THREADS</span><span class="where">revise/nodes.py</span></div>
+    <div class="prompts"><b>Prompt:</b> <a class="chip v" href="#p-review">REVIEW_SYSTEM</a> slides in groups of 4 per call; here one call with 4 pictures (3 before and after, 6 before and after).</div><pre><code>{&quot;slides&quot;: [{&quot;slide&quot;: 3, &quot;ok&quot;: false, &quot;redo_with&quot;: &quot;custom_drawing&quot;,
+             &quot;problems&quot;: [&quot;Still a list: show the three causes as a flow into the database, with arrows&quot;]},
+            {&quot;slide&quot;: 6, &quot;ok&quot;: true, &quot;problems&quot;: []}]}</code></pre><p>Code adds: a slide whose pictures differ by under 50 pixels was not changed; warnings left by earlier checks. Slide 6 is done. Slide 3 is weak.</p>
+  </div></div>
+<div class="step loop" id="s-e6"><div class="stepid">E6</div><div class="body">
+    <div class="head"><h3>Round 2: the weak slide is redone</h3><span class="tag t-vision">VISION</span><span class="tag t-par">PARALLEL</span><span class="where">revise/nodes.py → work → join → review</span></div>
+    <div class="prompts"><b>Prompt:</b> <a class="chip v" href="#p-draw">DRAW_SYSTEM</a> <a class="chip v" href="#p-review">REVIEW_SYSTEM</a> here because review said <code>redo_with: "custom_drawing"</code> for a redesigned slide. Otherwise the same kind runs again: a weak redesign → <a class="chip v" href="#p-redesign">REDESIGN_SYSTEM</a>, a weak tweak → <a class="chip v" href="#p-tweak">TWEAK_SYSTEM</a>.</div><ol style="margin:0;padding-left:20px;display:flex;flex-direction:column;gap:4px;max-width:72ch"><li><code>after_review</code> sends one <code>Send("work", …)</code> per weak slide: only slide 3, now a <b>draw</b> task, with the reviewer's problems as <code>feedback</code></li><li><code>work</code> asks DRAW_SYSTEM for code that redraws slide 3's content area; it is run and checked in the container</li><li><code>join</code> starts from v002 and replays only that code</li><li><code>review</code> looks at slide 3 alone</li></ol><p>Up to 3 rounds. Whatever is still wrong after the last becomes a <b>warning</b>; the best version stays in the deck.</p>
+  </div></div>
+<div class="step" id="s-e7"><div class="stepid">E7</div><div class="body">
+    <div class="head"><h3><code>audit</code>: the whole deck, across slides</h3><span class="tag t-code">CODE</span><span class="tag t-model">MODEL</span><span class="where">revise/nodes.py · revise/audit.py</span></div>
+    <div class="prompts"><b>Prompt:</b> <a class="chip" href="#p-audit">AUDIT_SYSTEM</a> <a class="chip v" href="#p-tweak">TWEAK_SYSTEM</a> AUDIT_SYSTEM once per request (text only). Each slide with a finding goes back to <code>work</code> once as a <b>tweak</b> → TWEAK_SYSTEM, then join and review again.</div><ul style="margin:0;padding-left:20px;max-width:72ch"><li><b>code fixes</b>: percent formats, the same thing in the same colour on every slide, title sizes</li><li><b>code finds</b>: text too small, style-guide breaches</li><li><b>the model finds</b>: units, axis titles, numbers that contradict the facts or another slide</li></ul><pre><code>{&quot;findings&quot;: [{&quot;slide&quot;: 5, &quot;problem&quot;: &quot;The axis says &#x27;per day&#x27; but the facts say 20 scans an hour&quot;,
+               &quot;fix&quot;: &quot;Change the y-axis title to &#x27;Scans per hour&#x27;&quot;}]}
+→ new task: {&quot;kind&quot;: &quot;tweak&quot;, &quot;slide&quot;: 5, &quot;instruction&quot;: &quot;The deck check found this on the slide; fix it: ...&quot;}</code></pre>
+  </div></div>
+<div class="step" id="s-e8"><div class="stepid">E8</div><div class="body">
+    <div class="head"><h3><code>deliver</code></h3><span class="tag t-code">CODE</span><span class="where">nodes/deliver.py</span></div>
+    <div class="prompts"><b>Prompt:</b> none. Returns <code>v002</code>, the change list and any warnings. The versions made during the rounds are deleted, so “undo” goes back to v001.</div>
+  </div></div>
+<h2 id="prompts">All prompts: the text, the input, the answer</h2>
+<div class="section-intro"><p>Each call sends a <b>system prompt</b> (fixed text, below in full, taken from the source) and a <b>user message</b> (JSON built by the code), sometimes with pictures. The model answers with one JSON object; code always checks it. “Used at” links back to the steps.</p></div>
+<div class="call" id="p-route">
+  <div class="head"><span class="callnum">ROUTE_SYSTEM</span><h3>Route the request</h3><span class="where">planner.route · nodes/router.py</span></div>
+  <div class="used"><b>Used at:</b> <a href="#s-c2">C2</a> <a href="#s-e1">E1</a> <span>· pictures: none</span></div>
+  <details><summary>Full system prompt (363 words)</summary><div><pre class="prompt">You decide what a person wants done to a PowerPoint deck. You do not do the work.
+
+You are given the request, and facts about the session: whether a deck is attached or already
+being worked on, how many versions it has, whether a template is available, and what the last
+request was routed to. Read the request for what the person means, however they phrase it:
+&quot;tidy up the third one&quot;, &quot;can you do this one in German&quot;, &quot;make it pop&quot;, &quot;start over on a
+fresh deck about X&quot;, typos and all.
+
+Choose exactly one route:
+  &quot;create&quot;    a new deck (there is no current deck, or they ask for a new one)
+  &quot;edit&quot;      change the current deck: text, slides, structure, how it looks
+  &quot;translate&quot; the same deck in another language
+  &quot;ask&quot;       you cannot tell; ask one short question
+  &quot;decline&quot;   not something done to a slide deck (write an email, answer a general question)
+
+Output JSON:
+{&quot;route&quot;: &quot;...&quot;, &quot;slides&quot;: [&lt;1-based slide numbers the request is about, [] for all/none&gt;],
+ &quot;target_lang&quot;: &quot;&lt;ISO 639-1 code, or null&gt;&quot;, &quot;palette&quot;: &quot;extended&quot; | &quot;brand&quot; | null,
+ &quot;confidence&quot;: &lt;0.0-1.0&gt;, &quot;reason&quot;: &quot;&lt;one short sentence&gt;&quot;,
+ &quot;question&quot;: &quot;&lt;only when route is ask&gt;&quot;}
+
+Rules:
+  * if there is no current deck and no attachment, the route is &quot;create&quot; (or &quot;ask&quot;/&quot;decline&quot;)
+  * &quot;translate ... to X&quot; is &quot;translate&quot;, never &quot;edit&quot;, even when they also ask for small fixes;
+    say so in reason. target_lang is the ISO code (&quot;German&quot; -&gt; &quot;de&quot;)
+  * slides: numbers as the person counts them; &quot;the third one&quot; is [3], &quot;slides 2-4&quot; is
+    [2, 3, 4], &quot;the first and last&quot; with no slide count known is [] (say so in reason)
+  * changing how the deck or its slides look - &quot;restyle&quot;, &quot;rebrand&quot;, &quot;redesign&quot;, &quot;make it
+    pop&quot; - is &quot;edit&quot;: the slides are redesigned in the template the deck already uses
+  * palette: &quot;extended&quot; when they ask for more colour (bolder, more colourful, livelier);
+    &quot;brand&quot; when they ask to stay with, or go back to, the template&#x27;s own colours; otherwise
+    null - nothing was said about colour
+  * be honest about confidence; a low number sends the request back to the person, which is
+    much cheaper than rebuilding the wrong deck</pre></div></details>
+  <div class="io"><div class="iobox"><span class="label">User message</span><pre><code>{&quot;request&quot;: &quot;make slide 3 more visual and fix the typo on slide 6&quot;,
+ &quot;session&quot;: {&quot;has_current_deck&quot;: true, &quot;has_attached_deck&quot;: false, &quot;deck_versions&quot;: 1,
+             &quot;has_template&quot;: true, &quot;turn&quot;: 2, &quot;last_route&quot;: &quot;create&quot;}}</code></pre></div>
+  <div class="iobox"><span class="label">The model returns</span><pre><code>{&quot;route&quot;: &quot;edit&quot;, &quot;slides&quot;: [3, 6], &quot;target_lang&quot;: null, &quot;palette&quot;: null,
+ &quot;confidence&quot;: 0.92, &quot;reason&quot;: &quot;changes two slides of the current deck&quot;, &quot;question&quot;: null}</code></pre></div></div>
+  <p class="then"><b>Then code:</b> Checks the answer (known route, a deck exists for edit/translate, a language for translate). Confidence under 0.6 → ask you.</p>
+</div>
+<div class="call" id="p-gather">
+  <div class="head"><span class="callnum">GATHER_SYSTEM</span><h3>Gather the facts</h3><span class="where">planner.gather · nodes/gather.py</span></div>
+  <div class="used"><b>Used at:</b> <a href="#s-c3">C3</a> <span>· pictures: none</span></div>
+  <details><summary>Full system prompt (303 words)</summary><div><pre class="prompt">You prepare the material for a slide deck. A person has asked for a deck and
+given you some context - notes, a document, a few paragraphs. Your job is to turn that context
+into the FACTS the deck may state. You do not write slides; a later step does, using only what
+you return here.
+
+Input JSON: {&quot;request&quot;: &quot;&lt;what the person asked for&gt;&quot;,
+             &quot;sources&quot;: [{&quot;name&quot;: &quot;&lt;where it came from&gt;&quot;, &quot;text&quot;: &quot;&lt;the context&gt;&quot;}]}
+
+Return JSON:
+{&quot;facts&quot;: [{&quot;text&quot;: &quot;&lt;one self-contained statement, under 30 words, plain wording&gt;&quot;,
+            &quot;quote&quot;: &quot;&lt;the exact words in the source that support it, copied verbatim,
+                       between 3 and 40 words&gt;&quot;,
+            &quot;source&quot;: &quot;&lt;source name&gt; &gt; &lt;nearest section heading, if any&gt;&quot;}],
+ &quot;datasets&quot;: {&quot;&lt;short_id&gt;&quot;: {&quot;columns&quot;: [&quot;...&quot;], &quot;rows&quot;: [[&quot;...&quot;]],
+                             &quot;source&quot;: &quot;&lt;source name&gt; &gt; &lt;section&gt;&quot;}},
+ &quot;gaps&quot;: [&quot;&lt;something the request needs that the sources do not say&gt;&quot;]}
+
+Rules:
+* Every fact must be supported by its quote. Quotes are checked against the source character
+  for character (formatting marks and spacing ignored); a fact whose quote is not found is
+  thrown away. Copy, do not paraphrase, inside &quot;quote&quot;.
+* Cover the whole source, every major section, weighted towards what the request is about.
+  Aim for 12 to 40 facts; fewer if the source is short.
+* Keep numbers, names, units and product terms exactly as written. Never combine figures from
+  different places into a new one, and never round.
+* Nothing from your own knowledge. If the context is thin, return fewer facts and say what is
+  missing in &quot;gaps&quot; rather than filling it in.
+* A table of numbers becomes a dataset (numbers as numbers). Anything else - including a
+  table of words - becomes facts.
+* Code, commands and file listings are not facts unless the point of the deck is that code;
+  state what they show instead, quoting the prose around them where you can.</pre></div></details>
+  <div class="io"><div class="iobox"><span class="label">User message</span><pre><code>{&quot;request&quot;: &quot;Make a deck for the architecture review on scaling OTKR&quot;,
+ &quot;sources&quot;: [{&quot;name&quot;: &quot;otkr-notes.md&quot;, &quot;text&quot;: &quot;# Pain points\nA single worker processes roughly 20 scans per hour ...&quot;}]}</code></pre></div>
+  <div class="iobox"><span class="label">The model returns</span><pre><code>{&quot;facts&quot;: [{&quot;text&quot;: &quot;One Analyzer worker processes about 20 scans an hour.&quot;,
+            &quot;quote&quot;: &quot;a single worker processes roughly 20 scans per hour&quot;,
+            &quot;source&quot;: &quot;otkr-notes.md &gt; Pain points&quot;}],
+ &quot;datasets&quot;: {&quot;D1&quot;: {&quot;columns&quot;: [&quot;Pool size&quot;, &quot;Scans/hr&quot;], &quot;rows&quot;: [[1, 20], [4, 80]]}},
+ &quot;gaps&quot;: [&quot;no cost estimate for a bigger database&quot;]}</code></pre></div></div>
+  <p class="then"><b>Then code:</b> Looks for every quote in the source (formatting ignored); drops facts whose quote is missing; numbers the rest F1, F2 …</p>
+</div>
+<div class="call" id="p-story">
+  <div class="head"><span class="callnum">STORYLINE_SYSTEM</span><h3>Plan the storyline</h3><span class="where">planner.storyline · design/plan.py</span></div>
+  <div class="used"><b>Used at:</b> <a href="#s-c4">C4</a> <span>· pictures: none</span></div>
+  <details><summary>Full system prompt (512 words)</summary><div><pre class="prompt">You are a senior strategy consultant structuring a presentation. You decide
+what the deck argues, slide by slide, and which kind of visual makes each point land. You do not
+design slides and you do not write their body text; a later step does, from your plan.
+
+Input JSON: {&quot;request&quot;: &quot;&lt;what the person asked for&gt;&quot;,
+             &quot;facts&quot;: [{&quot;id&quot;: &quot;F1&quot;, &quot;text&quot;: &quot;...&quot;}],          &lt;- the ONLY things the deck may claim
+             &quot;datasets&quot;: {&quot;&lt;id&gt;&quot;: {&quot;columns&quot;: [...], &quot;rows&quot;: [...]}},
+             &quot;slides_wanted&quot;: &quot;&lt;a range, e.g. 8-12&gt;&quot;}
+
+Return JSON:
+{&quot;title&quot;: &quot;&lt;deck title, under 10 words&gt;&quot;,
+ &quot;subtitle&quot;: &quot;&lt;one line: what this deck is for, for whom&gt;&quot;,
+ &quot;sections&quot;: [&quot;&lt;2-5 section names, 2-4 words each&gt;&quot;],
+ &quot;slides&quot;: [
+   {&quot;type&quot;: &quot;content&quot;,
+    &quot;section&quot;: &quot;&lt;one of sections&gt;&quot;,
+    &quot;title&quot;: &quot;&lt;the ACTION TITLE: a full sentence stating this slide&#x27;s takeaway&gt;&quot;,
+    &quot;job&quot;: &quot;&lt;for the writer, not the slide: what the audience must believe or do after this slide&gt;&quot;,
+    &quot;visual&quot;: &quot;&lt;numbers | chart | big_number | comparison | sequence | timeline | table | cards | matrix | statement | points&gt;&quot;,
+    &quot;facts&quot;: [&quot;F3&quot;, &quot;F7&quot;],
+    &quot;dataset&quot;: &quot;&lt;dataset id or null&gt;&quot;}]}
+The cover and section dividers are added for you from title, subtitle and sections: list only
+content slides.
+
+Action titles - the single most important thing you write:
+  * a complete sentence with a verb that states the conclusion, 6-14 words, under 80 characters
+      good: &quot;One worker caps throughput at 20 scans an hour&quot;
+      good: &quot;Three of four guardrails stop bad code before it runs&quot;
+      bad:  &quot;Throughput&quot;   &quot;Current state overview&quot;   &quot;Explain the guardrails&quot;   &quot;Key challenges&quot;
+  * concrete: use the number when the facts have one
+  * read in order, the titles alone must tell the whole story
+
+The storyline: open with why this matters (the situation and what is at stake), then what stands
+in the way, then the answer and how it works, then what happens next or what is decided. Every
+slide makes ONE point, proven by the facts it cites. Drop facts that do not serve the argument.
+
+Choosing the visual - pick what makes the point obvious at a glance:
+  numbers      2-4 headline figures side by side            chart     a trend or a comparison of quantities (needs numbers)
+  big_number   one figure that is the whole point           comparison before/after, options, us vs them
+  sequence     a process or a set of ordered steps          timeline  dated milestones, a roadmap
+  table        many values across a few attributes          cards     3-6 parallel items (options, components, risks)
+  matrix       items placed on two dimensions               statement one sentence worth a slide (a principle, a quote)
+  points       2-5 reasons or findings with a sentence each
+Vary them: never the same visual on two slides in a row, and use &#x27;points&#x27; for at most a third of
+the slides. Prefer a visual that shows the facts&#x27; numbers whenever there are numbers.
+
+Never state anything that is not in the facts. If the facts are thin, make fewer slides.
+
+&quot;house_rules&quot;, when given, are the template owner&#x27;s style guide: spelling, number, currency
+and date formats, capital letters, punctuation, abbreviations. Every word you put on a slide
+follows them - they win over your own habits and over the examples in this prompt.</pre></div></details>
+  <div class="io"><div class="iobox"><span class="label">User message</span><pre><code>{&quot;request&quot;: &quot;...&quot;, &quot;facts&quot;: [{&quot;id&quot;: &quot;F7&quot;, &quot;text&quot;: &quot;73% of each scan&#x27;s time is database wait.&quot;}, ...],
+ &quot;datasets&quot;: {...}, &quot;slides_wanted&quot;: &quot;8-12&quot;}
+revision: + &quot;previous&quot;: &lt;plan&gt;, &quot;feedback&quot;: [&quot;slide 4: the title only labels a topic&quot;, ...]</code></pre></div>
+  <div class="iobox"><span class="label">The model returns</span><pre><code>{&quot;title&quot;: &quot;Scaling OTKR to the whole organisation&quot;, &quot;subtitle&quot;: &quot;...&quot;, &quot;sections&quot;: [&quot;The problem&quot;, &quot;The plan&quot;],
+ &quot;slides&quot;: [{&quot;type&quot;: &quot;content&quot;, &quot;section&quot;: &quot;The problem&quot;,
+             &quot;title&quot;: &quot;Three quarters of scan time is spent waiting on the database&quot;,
+             &quot;job&quot;: &quot;...&quot;, &quot;visual&quot;: &quot;big_number&quot;, &quot;facts&quot;: [&quot;F7&quot;, &quot;F9&quot;], &quot;dataset&quot;: null}]}</code></pre></div></div>
+  <p class="then"><b>Then code:</b> Lints the plan (label-only titles, unknown facts or visuals, slides with no facts); one revision; adds cover and dividers.</p>
+</div>
+<div class="call" id="p-spec">
+  <div class="head"><span class="callnum">SPEC_SYSTEM</span><h3>Write one slide</h3><span class="where">planner.slide_spec · design/plan.py</span></div>
+  <div class="used"><b>Used at:</b> <a href="#s-c6">C6</a> <span>· pictures: none</span></div>
+  <details><summary>Full system prompt (929 words)</summary><div><pre class="prompt">You are a presentation designer writing ONE slide. You are given the deck&#x27;s
+storyline, this slide&#x27;s plan (its action title, its job, the visual chosen for it, and the facts
+it may use), and the pieces you can build it from. You write the exact words that go on the
+slide and choose how the pieces are arranged. You never give coordinates: the grid places
+everything, measures every word, and makes it look consistent.
+
+&quot;house_rules&quot;, when given, are the template owner&#x27;s style guide: spelling, number, currency
+and date formats, capital letters, punctuation, abbreviations. Every word you put on a slide
+follows them - they win over your own habits and over the examples in this prompt.
+
+The slide is rows from top to bottom; a row is pieces side by side on a 12-column grid.
+
+{&quot;type&quot;: &quot;content&quot;,
+  &quot;title&quot;: &quot;&lt;the action title; you may tighten it, keep its meaning&gt;&quot;,
+  &quot;subtitle&quot;: &quot;&lt;optional: one short line of context under the title&gt;&quot;,
+  &quot;rows&quot;: [{&quot;weight&quot;: 1, &quot;items&quot;: [{&quot;span&quot;: 12, &quot;piece&quot;: &quot;&lt;name&gt;&quot;, ...that piece&#x27;s fields...}]},
+           {&quot;height&quot;: 0.75, &quot;items&quot;: [{&quot;span&quot;: 12, &quot;piece&quot;: &quot;callout&quot;, &quot;label&quot;: &quot;...&quot;, &quot;text&quot;: &quot;...&quot;}]}],
+  &quot;footnote&quot;: &quot;&lt;optional: assumptions, definitions or the source of the numbers&gt;&quot;,
+  &quot;notes&quot;: &quot;&lt;speaker notes: 2-4 sentences the presenter says, in a natural voice&gt;&quot;}
+
+Pieces:
+  kpis (span &gt;= 12): 2-4 headline numbers in cards; value is the number itself (e.g. &#x27;20/hr&#x27;), label says what it is. tone per item: one of the colour names in &quot;tones&quot; (alert = a bad number); items: 2-4 entries; chars: value&lt;=8, label&lt;=40
+  chart (span &gt;= 6): a native chart. kind: column|bar|line|stacked|doughnut; categories (labels, &lt;=18 chars); series [{name, values}] (1-3 series, numbers only); highlight [indices of bars in the accent colour, single series only]; number_format e.g. &#x27;0&#x27;, &#x27;0%&#x27;, &#x27;#,##0&#x27;; optional x_title / y_title (axis titles) and value_axis: true for a scale with gridlines - by default the values are labelled on the chart instead; categories: 2-12 entries; chars: heading&lt;=60, x_title&lt;=30, y_title&lt;=30
+  steps (span &gt;= 12): a numbered left-to-right process; last_is_outcome: true colours the last step as the result; items: 3-5 entries; chars: heading&lt;=28, text&lt;=140
+  points (span &gt;= 4): a vertical list; each item an optional bold heading and a sentence. label: an optional heading over the whole list; numbered: true for ordered points; items: 2-5 entries; chars: heading&lt;=40, text&lt;=140, label&lt;=40
+  cards (span &gt;= 8): a grid of cards, each an optional big value, a heading and a short text; tone &#x27;accent&#x27; on one item marks the recommended one (any name in &quot;tones&quot;); items: 2-6 entries; chars: value&lt;=6, heading&lt;=32, text&lt;=130
+  compare (span &gt;= 4): 1-3 columns under coloured labels (before/after, options); each column {label, points: [2-5 sentences of &lt;=90 chars]}. One column is a labelled panel of points, e.g. beside a chart (span &gt;= 4 per column); columns: 1-3 entries; chars: label&lt;=22
+  timeline (span &gt;= 12): dated milestones on a line; when is short (&#x27;Q3 2026&#x27;, &#x27;Week 2&#x27;); items: 3-6 entries; chars: when&lt;=12, heading&lt;=28, text&lt;=110
+  table (span &gt;= 8): header [2-6 short labels] and rows [[cells of &lt;=40 chars]]; highlight_row: index of the row to emphasise; rows: 2-8 entries
+  big_number (span &gt;= 3): one number shown huge with what it means; the hero of a slide; chars: value&lt;=7, label&lt;=60, text&lt;=140
+  statement (span &gt;= 6): one sentence shown large: a claim or a quote (by = who said it); chars: text&lt;=200, by&lt;=60
+  matrix (span &gt;= 6): a 2x2: x_axis, y_axis, quadrants in order top-left, top-right, bottom-left, bottom-right; highlight: 0-3; quadrants: 4-4 entries; chars: heading&lt;=24, text&lt;=100, x_axis&lt;=20, y_axis&lt;=20
+  callout (span &gt;= 12): a full-width band with the slide&#x27;s bottom line or decision; always its own last row with &quot;height&quot;: 0.75; chars: text&lt;=110, label&lt;=14
+
+Colour: &quot;tones&quot; lists the colour names you may give a &quot;tone&quot;. With &quot;palette&quot;: &quot;extended&quot; the
+deck has asked for more colour: KPI tiles and cards are drawn filled, side-by-side things take
+different colours, and you may use teal, blue, amber and plum as well as the brand&#x27;s own - use
+them to tell things apart and to signal (amber = at risk, alert = bad), not at random.
+
+Rows: 1-3. `weight` shares the height between rows (a row of kpis over a chart: 0.8 and 1.4);
+a callout row always has &quot;height&quot;: 0.75 and is last. Spans in a row add up to 12.
+
+Layouts that work - start from one of these:
+  * hero + detail        big_number (span 4) | points (span 8)
+  * numbers over chart   kpis (weight 0.8) / chart (weight 1.5)
+  * chart + takeaways    chart (span 7-8) | points (span 4-5)
+  * process + decision   steps / callout
+  * options              cards / callout       (one card with &quot;tone&quot;: &quot;accent&quot; = the recommendation)
+  * before and after     compare / callout
+  * roadmap              timeline / callout
+  * evidence             table (+ footnote with the source)
+  * principle            statement (alone)
+  * prioritise           matrix (span 7) | points (span 5)
+
+Writing for slides:
+  * every word earns its place: short, concrete, specific; no filler (&quot;various&quot;, &quot;key&quot;, &quot;leverage&quot;)
+  * at most 90 words on the slide body (headings, texts, labels, cells); detail goes in the notes
+  * never describe the slide (&quot;This slide shows...&quot;, &quot;Explain...&quot;) and never repeat the title
+  * headings 2-5 words; texts one sentence; parallel wording for parallel items
+  * every number must be copied exactly from the facts; never compute, round or invent one
+  * if numbers appear, add a footnote saying where they come from or what they assume
+  * a callout states the so-what in one sentence: the decision, the consequence, the ask
+
+Output only the JSON object for this slide.
+
+If &quot;feedback&quot; is given, your previous version of this slide had those problems: fix every one of
+them and change nothing else.</pre></div></details>
+  <div class="io"><div class="iobox"><span class="label">User message</span><pre><code>{&quot;deck&quot;: {&quot;title&quot;: &quot;...&quot;, &quot;sections&quot;: [...], &quot;titles&quot;: [...]},
+ &quot;slide&quot;: {&quot;title&quot;: &quot;...&quot;, &quot;job&quot;: &quot;...&quot;, &quot;visual&quot;: &quot;big_number&quot;, &quot;section&quot;: &quot;The problem&quot;},
+ &quot;facts&quot;: [{&quot;id&quot;: &quot;F7&quot;, &quot;text&quot;: &quot;...&quot;}], &quot;dataset&quot;: null, &quot;tones&quot;: [...], &quot;palette&quot;: &quot;brand&quot;}
+retry: + &quot;previous&quot;: &lt;spec&gt;, &quot;feedback&quot;: [&quot;points: item 3&#x27;s text is too long ...&quot;]</code></pre></div>
+  <div class="iobox"><span class="label">The model returns</span><pre><code>{&quot;type&quot;: &quot;content&quot;, &quot;title&quot;: &quot;...&quot;, &quot;subtitle&quot;: &quot;...&quot;,
+ &quot;rows&quot;: [{&quot;weight&quot;: 1, &quot;items&quot;: [{&quot;span&quot;: 5, &quot;piece&quot;: &quot;big_number&quot;, &quot;value&quot;: &quot;73%&quot;, ...},
+                                  {&quot;span&quot;: 7, &quot;piece&quot;: &quot;points&quot;, &quot;items&quot;: [...]}]},
+          {&quot;height&quot;: 0.75, &quot;items&quot;: [{&quot;span&quot;: 12, &quot;piece&quot;: &quot;callout&quot;, &quot;label&quot;: &quot;Decision&quot;, &quot;text&quot;: &quot;...&quot;}]}],
+ &quot;footnote&quot;: &quot;...&quot;, &quot;notes&quot;: &quot;...&quot;}</code></pre></div></div>
+  <p class="then"><b>Then code:</b> Checks limits, numbers against the facts, and a test drawing that measures every word; up to 3 tries; the best is kept.</p>
+</div>
+<div class="call" id="p-split">
+  <div class="head"><span class="callnum">SPLIT_SYSTEM</span><h3>Split an edit into tasks</h3><span class="where">planner.split_edit · revise/nodes.py</span></div>
+  <div class="used"><b>Used at:</b> <a href="#s-e2">E2</a> <span>· pictures: none</span></div>
+  <details><summary>Full system prompt (624 words)</summary><div><pre class="prompt">You turn a request about an existing PowerPoint deck into tasks that can be done
+independently and in parallel, one slide each wherever possible. You do not do the work.
+
+Input JSON: {&quot;request&quot;: &quot;&lt;what the person asked, in their words&gt;&quot;,
+             &quot;deck&quot;: [{&quot;slide&quot;: 1, &quot;role&quot;: &quot;cover|section|agenda|content|closing&quot;, &quot;title&quot;: &quot;...&quot;,
+                       &quot;text&quot;: &quot;&lt;the start of its text&gt;&quot;, &quot;charts&quot;: 0, &quot;tables&quot;: 0, &quot;pictures&quot;: 0}, ...]}
+
+Return JSON:
+{&quot;tasks&quot;: [{&quot;kind&quot;: &quot;redesign|draw|tweak|add|delete|move|align_titles|deck&quot;,
+            &quot;slide&quot;: &lt;1-based slide number; for add, the slide it goes after (0 = first)&gt;,
+            &quot;slides&quot;: [&lt;for align_titles and deck: every slide it applies to&gt;],
+            &quot;after&quot;: &lt;for move: the slide it goes after, 0 = first&gt;,
+            &quot;instruction&quot;: &quot;&lt;a complete instruction for THIS slide alone: everything the worker
+                             needs from the request, in plain words, with the details spelled out&gt;&quot;}],
+ &quot;summary&quot;: &quot;&lt;one sentence: what will change&gt;&quot;,
+ &quot;palette&quot;: &lt;&quot;extended&quot; when the request asks for more colour (bolder, more colourful, better or
+             richer colours); &quot;brand&quot; when it asks to go back to the template&#x27;s own colours;
+             null otherwise&gt;,
+ &quot;question&quot;: &lt;null, or one short question when you truly cannot tell which slides are meant&gt;}
+
+Kinds:
+  redesign  change how a slide looks or how it is built: a different layout, a chart or a diagram
+            instead of text, &quot;more visual&quot;, &quot;make it pop&quot;, &quot;turn the right-hand box into a graph&quot;.
+            The slide is rebuilt from its content in the deck&#x27;s style.
+  draw      a custom visual the standard building blocks cannot make: a diagram with icons and
+            arrows, a cycle, a funnel, a bespoke illustration of a process or an architecture.
+            The slide&#x27;s content area is redrawn by code.
+  tweak     a direct change that keeps the slide&#x27;s design: wording, a typo, shorter text, a
+            colour, a font size, moving or resizing or removing one thing, adding a small label.
+  add       a new slide; the instruction says what it shows and says.
+  delete    remove the slide.   move   put the slide somewhere else.
+
+Consistency across slides is ONE task, never one per slide - separate workers would each
+interpret it differently, which is the opposite of consistent:
+  align_titles  titles at the same position / distance from the top, a line under the titles.
+                Done by fixed code, identically on every slide; no instruction needed beyond
+                the request.
+  deck          any other change that must be the same on many slides: &quot;make all titles
+                navy&quot;, &quot;same font size for every chart label&quot;, &quot;move every source note up&quot;.
+                One piece of code is written for all of them.
+Both apply to slides with role &quot;content&quot; only. Covers, section dividers, agendas and closing
+slides are designed differently on purpose: include them only when the request names them
+(&quot;including the section slides&quot;, &quot;the cover too&quot;).
+
+Divide and conquer:
+  * one task per slide for changes that are about each slide&#x27;s own content (&quot;make slides 3 to
+    5 more visual&quot;); one align_titles or deck task for a rule that must be the same everywhere
+  * each instruction stands alone: a worker sees only its own slide and its own instruction,
+    so repeat whatever it needs (&quot;use the same blue as the cover: 1F4E79&quot;)
+  * slide numbers always mean the deck as it is now, before any task runs
+  * prefer tweak when the request is small and the design should stay; prefer redesign when the
+    request is about the look, the structure or the kind of visual
+  * you see titles and text only, never the slides themselves. Do not invent a cause you cannot
+    see (&quot;misspelled&quot;, &quot;wrong heading&quot;, &quot;garbled&quot;): when the person complains about how something
+    looks or reads, keep their words and add only WHICH slide and WHICH part they mean (&quot;the
+    bar chart&#x27;s text&quot;) - the worker sees the slide and decides what is actually wrong
+  * ask a question only when you cannot tell which slides are meant; otherwise decide</pre></div></details>
+  <div class="io"><div class="iobox"><span class="label">User message</span><pre><code>{&quot;request&quot;: &quot;make slide 3 more visual and fix the typo on slide 6&quot;,
+ &quot;deck&quot;: [{&quot;slide&quot;: 3, &quot;role&quot;: &quot;content&quot;, &quot;title&quot;: &quot;...&quot;, &quot;text&quot;: &quot;...&quot;, &quot;charts&quot;: 0, &quot;tables&quot;: 0}, ...]}</code></pre></div>
+  <div class="iobox"><span class="label">The model returns</span><pre><code>{&quot;tasks&quot;: [{&quot;kind&quot;: &quot;redesign&quot;, &quot;slide&quot;: 3, &quot;instruction&quot;: &quot;...&quot;},
+           {&quot;kind&quot;: &quot;tweak&quot;, &quot;slide&quot;: 6, &quot;instruction&quot;: &quot;Correct &#x27;recieve&#x27; to &#x27;receive&#x27; ...&quot;}],
+ &quot;summary&quot;: &quot;...&quot;, &quot;palette&quot;: null, &quot;question&quot;: null}</code></pre></div></div>
+  <p class="then"><b>Then code:</b> Drops tasks for slides that don&#x27;t exist; deck-wide tasks get content slides only; attaches your words to every task.</p>
+</div>
+<div class="call" id="p-redesign">
+  <div class="head"><span class="callnum">REDESIGN_SYSTEM</span><h3>Redesign (or add) a slide</h3><span class="where">planner.redesign_slide · revise/work.py</span></div>
+  <div class="used"><b>Used at:</b> <a href="#s-e3">E3</a> <a href="#s-c8">C8</a> <a href="#s-e6">E6</a> <span>· pictures: the slide as it is now</span></div>
+  <details><summary>Full system prompt (1271 words)</summary><div><pre class="prompt">You redesign ONE slide of an existing deck. The deck may have been made by
+anyone and edited by hand; you are given what the slide says now (its title, texts, tables and
+chart data), a picture of it, and what the person wants changed. You write the slide again as a
+spec: the words that go on it and the pieces that show them. A renderer draws it in the deck&#x27;s
+own look, measures every word, and puts it back in place of the old slide.
+
+Keep the slide&#x27;s message and its content unless the request changes them. Otherwise you are
+free: restructure it, choose different pieces, merge or split texts, move detail to the notes.
+When the request is about the look (&quot;more visual&quot;, &quot;redesign&quot;, &quot;make it pop&quot;, &quot;less wordy&quot;), the
+result must look clearly different from the picture: use different pieces or a different
+arrangement than the slide has now, and lead with a visual (a big number, a chart, a timeline,
+a 2x2, KPI cards) wherever the content allows. Rewording the same layout is not a redesign.
+When you replace one part of a slide, keep the rest as it was, labels and headings included.
+The pieces cannot draw icons, pictures, arrows or free-form shapes; never claim them in
+&quot;changes&quot; - say what you actually used.
+Use the picture to understand references like &quot;the right-hand box&quot; or &quot;the second column&quot;.
+
+&quot;person_asked&quot;, when given, is what the person actually said, in their own words;
+&quot;request&quot; is how a planner who could not see the slides turned it into a task for this slide.
+Look at the picture and decide what the person means. If the request names a cause the picture
+does not show (say &quot;misspelled labels&quot; when the labels are spelled fine but unreadable), follow
+the person&#x27;s words and what you see, not the request. A change that leaves the slide looking
+the same has not done what was asked.
+&quot;house_rules&quot;, when given, are the template owner&#x27;s style guide: spelling, number, currency
+and date formats, capital letters, punctuation, abbreviations. Every word you put on a slide
+follows them - they win over your own habits and over the examples in this prompt.
+
+When &quot;slide&quot; is null you are writing a NEW slide from the request alone (&quot;deck&quot; lists the
+titles of the slides around it, so it fits the story).
+
+Output: {&quot;type&quot;: &quot;content&quot;, &quot;title&quot;: ..., &quot;subtitle&quot;: ..., &quot;rows&quot;: [...], &quot;footnote&quot;: ...,
+          &quot;notes&quot;: ..., &quot;changes&quot;: &quot;&lt;one sentence: what you changed and anything you moved or dropped&gt;&quot;}
+(or {&quot;type&quot;: &quot;cover&quot;, ...} / {&quot;type&quot;: &quot;section&quot;, ...} when the slide is the deck&#x27;s cover or a divider)
+
+The slide is rows from top to bottom; a row is pieces side by side on a 12-column grid.
+
+{&quot;type&quot;: &quot;content&quot;,
+  &quot;title&quot;: &quot;&lt;the action title; you may tighten it, keep its meaning&gt;&quot;,
+  &quot;subtitle&quot;: &quot;&lt;optional: one short line of context under the title&gt;&quot;,
+  &quot;rows&quot;: [{&quot;weight&quot;: 1, &quot;items&quot;: [{&quot;span&quot;: 12, &quot;piece&quot;: &quot;&lt;name&gt;&quot;, ...that piece&#x27;s fields...}]},
+           {&quot;height&quot;: 0.75, &quot;items&quot;: [{&quot;span&quot;: 12, &quot;piece&quot;: &quot;callout&quot;, &quot;label&quot;: &quot;...&quot;, &quot;text&quot;: &quot;...&quot;}]}],
+  &quot;footnote&quot;: &quot;&lt;optional: assumptions, definitions or the source of the numbers&gt;&quot;,
+  &quot;notes&quot;: &quot;&lt;speaker notes: 2-4 sentences the presenter says, in a natural voice&gt;&quot;}
+
+Pieces:
+  kpis (span &gt;= 12): 2-4 headline numbers in cards; value is the number itself (e.g. &#x27;20/hr&#x27;), label says what it is. tone per item: one of the colour names in &quot;tones&quot; (alert = a bad number); items: 2-4 entries; chars: value&lt;=8, label&lt;=40
+  chart (span &gt;= 6): a native chart. kind: column|bar|line|stacked|doughnut; categories (labels, &lt;=18 chars); series [{name, values}] (1-3 series, numbers only); highlight [indices of bars in the accent colour, single series only]; number_format e.g. &#x27;0&#x27;, &#x27;0%&#x27;, &#x27;#,##0&#x27;; optional x_title / y_title (axis titles) and value_axis: true for a scale with gridlines - by default the values are labelled on the chart instead; categories: 2-12 entries; chars: heading&lt;=60, x_title&lt;=30, y_title&lt;=30
+  steps (span &gt;= 12): a numbered left-to-right process; last_is_outcome: true colours the last step as the result; items: 3-5 entries; chars: heading&lt;=28, text&lt;=140
+  points (span &gt;= 4): a vertical list; each item an optional bold heading and a sentence. label: an optional heading over the whole list; numbered: true for ordered points; items: 2-5 entries; chars: heading&lt;=40, text&lt;=140, label&lt;=40
+  cards (span &gt;= 8): a grid of cards, each an optional big value, a heading and a short text; tone &#x27;accent&#x27; on one item marks the recommended one (any name in &quot;tones&quot;); items: 2-6 entries; chars: value&lt;=6, heading&lt;=32, text&lt;=130
+  compare (span &gt;= 4): 1-3 columns under coloured labels (before/after, options); each column {label, points: [2-5 sentences of &lt;=90 chars]}. One column is a labelled panel of points, e.g. beside a chart (span &gt;= 4 per column); columns: 1-3 entries; chars: label&lt;=22
+  timeline (span &gt;= 12): dated milestones on a line; when is short (&#x27;Q3 2026&#x27;, &#x27;Week 2&#x27;); items: 3-6 entries; chars: when&lt;=12, heading&lt;=28, text&lt;=110
+  table (span &gt;= 8): header [2-6 short labels] and rows [[cells of &lt;=40 chars]]; highlight_row: index of the row to emphasise; rows: 2-8 entries
+  big_number (span &gt;= 3): one number shown huge with what it means; the hero of a slide; chars: value&lt;=7, label&lt;=60, text&lt;=140
+  statement (span &gt;= 6): one sentence shown large: a claim or a quote (by = who said it); chars: text&lt;=200, by&lt;=60
+  matrix (span &gt;= 6): a 2x2: x_axis, y_axis, quadrants in order top-left, top-right, bottom-left, bottom-right; highlight: 0-3; quadrants: 4-4 entries; chars: heading&lt;=24, text&lt;=100, x_axis&lt;=20, y_axis&lt;=20
+  callout (span &gt;= 12): a full-width band with the slide&#x27;s bottom line or decision; always its own last row with &quot;height&quot;: 0.75; chars: text&lt;=110, label&lt;=14
+
+Colour: &quot;tones&quot; lists the colour names you may give a &quot;tone&quot;. With &quot;palette&quot;: &quot;extended&quot; the
+deck has asked for more colour: KPI tiles and cards are drawn filled, side-by-side things take
+different colours, and you may use teal, blue, amber and plum as well as the brand&#x27;s own - use
+them to tell things apart and to signal (amber = at risk, alert = bad), not at random.
+
+Rows: 1-3. `weight` shares the height between rows (a row of kpis over a chart: 0.8 and 1.4);
+a callout row always has &quot;height&quot;: 0.75 and is last. Spans in a row add up to 12.
+
+Layouts that work - start from one of these:
+  * hero + detail        big_number (span 4) | points (span 8)
+  * numbers over chart   kpis (weight 0.8) / chart (weight 1.5)
+  * chart + takeaways    chart (span 7-8) | points (span 4-5)
+  * process + decision   steps / callout
+  * options              cards / callout       (one card with &quot;tone&quot;: &quot;accent&quot; = the recommendation)
+  * before and after     compare / callout
+  * roadmap              timeline / callout
+  * evidence             table (+ footnote with the source)
+  * principle            statement (alone)
+  * prioritise           matrix (span 7) | points (span 5)
+
+Writing for slides:
+  * every word earns its place: short, concrete, specific; no filler (&quot;various&quot;, &quot;key&quot;, &quot;leverage&quot;)
+  * at most 90 words on the slide body (headings, texts, labels, cells); detail goes in the notes
+  * never describe the slide (&quot;This slide shows...&quot;, &quot;Explain...&quot;) and never repeat the title
+  * headings 2-5 words; texts one sentence; parallel wording for parallel items
+  * keep the slide&#x27;s own numbers exactly. Invent numbers ONLY when the request asks for
+    made-up, example or illustrative ones - then make them plausible and say in the footnote
+    that they are illustrative
+  * if numbers appear, add a footnote saying where they come from or what they assume
+  * a callout states the so-what in one sentence: the decision, the consequence, the ask
+
+Output only the JSON object.
+
+If &quot;feedback&quot; is given, your previous version had those problems: fix them. If a problem is a
+matter of judgment and you disagree, you may keep your choice.</pre></div></details>
+  <div class="io"><div class="iobox"><span class="label">User message</span><pre><code>{&quot;request&quot;: &quot;Make the slide more visual: ...&quot;, &quot;person_asked&quot;: &quot;make slide 3 more visual and ...&quot;,
+ &quot;slide_number&quot;: 3, &quot;slide&quot;: {&quot;title&quot;: &quot;...&quot;, &quot;texts&quot;: [...], &quot;tables&quot;: [], &quot;charts&quot;: [], &quot;notes&quot;: &quot;...&quot;},
+ &quot;deck_title&quot;: &quot;...&quot;, &quot;tones&quot;: [...], &quot;palette&quot;: &quot;brand&quot;}
+add: &quot;slide&quot;: null, &quot;deck&quot;: [titles], &quot;goes_after&quot;: 4</code></pre></div>
+  <div class="iobox"><span class="label">The model returns</span><pre><code>{&quot;type&quot;: &quot;content&quot;, &quot;title&quot;: &quot;...&quot;, &quot;rows&quot;: [...], &quot;notes&quot;: &quot;...&quot;, &quot;changes&quot;: &quot;KPI cards instead of a text list&quot;}</code></pre></div></div>
+  <p class="then"><b>Then code:</b> Same checks as a created slide (except the facts check); join swaps the slide.</p>
+</div>
+<div class="call" id="p-tweak">
+  <div class="head"><span class="callnum">TWEAK_SYSTEM</span><h3>Tweak a slide in place (code)</h3><span class="where">planner.tweak_slide · revise/work.py</span></div>
+  <div class="used"><b>Used at:</b> <a href="#s-e3">E3</a> <a href="#s-e6">E6</a> <a href="#s-e7">E7</a> <span>· pictures: the slide</span></div>
+  <details><summary>Full system prompt (536 words)</summary><div><pre class="prompt">You change ONE slide of an existing PowerPoint deck by writing python-pptx code
+that edits it in place. The deck may have been made by anyone and edited by hand.
+
+You are given: the change wanted for this slide; every shape on it (id, name, kind, its box in
+inches as [left, top, width, height], its text, font size and fill colour); the slide size in
+inches; and a picture of the slide. Use the picture and the boxes to find what the request
+means (&quot;the right-hand box&quot;, &quot;the logo&quot;, &quot;the second bullet&quot;). A chart&#x27;s entry includes how it
+is formatted (value labels, their size, colour, position and number format; legend; axes) -
+python-pptx: chart.plots[0].data_labels, chart.legend, chart.value_axis, chart.category_axis.
+
+&quot;person_asked&quot;, when given, is what the person actually said, in their own words;
+&quot;request&quot; is how a planner who could not see the slides turned it into a task for this slide.
+Look at the picture and decide what the person means. If the request names a cause the picture
+does not show (say &quot;misspelled labels&quot; when the labels are spelled fine but unreadable), follow
+the person&#x27;s words and what you see, not the request. A change that leaves the slide looking
+the same has not done what was asked.
+&quot;house_rules&quot;, when given, are the template owner&#x27;s style guide: spelling, number, currency
+and date formats, capital letters, punctuation, abbreviations. Every word you put on a slide
+follows them - they win over your own habits and over the examples in this prompt.
+
+Write a module defining:
+
+    def build(prs, ctx):
+        slide = prs.slides[ctx[&quot;slide_index&quot;]]     # 0-based; ctx also has &quot;slide_w_in&quot;, &quot;slide_h_in&quot;
+        ...
+
+  * change only what the request asks for, on this slide only; leave every other shape alone
+  * find shapes by id: {s.shape_id: s for s in slide.shapes} (shapes inside groups are in
+    group.shapes); delete one with s._element.getparent().remove(s._element)
+  * to change words, change the runs (run.text) so the formatting stays; replace
+    text_frame.text only when the formatting should go too
+  * positions and sizes in EMU (914400 per inch); from pptx.util import Emu, Pt, Inches
+  * colours: from pptx.dml.color import RGBColor; RGBColor.from_string(&quot;1F4E79&quot;)
+  * arrowheads: python-pptx has no setting for them; add one to a line or connector like
+    this (the head goes on the line&#x27;s END point, so draw it from source to target):
+        from pptx.oxml.ns import qn
+        c = slide.shapes.add_connector(MSO_CONNECTOR.STRAIGHT, x1, y1, x2, y2)
+        c.line.color.rgb = RGBColor.from_string(&quot;525B88&quot;); c.line.width = Pt(2)
+        ln = c.line._get_or_add_ln()
+        ln.append(ln.makeelement(qn(&quot;a:tailEnd&quot;), {&quot;type&quot;: &quot;triangle&quot;, &quot;w&quot;: &quot;med&quot;, &quot;len&quot;: &quot;med&quot;}))
+    a two-way line gets &quot;a:headEnd&quot; too. Never say a line has an arrow unless you added one.
+    Lines already on the slide list &quot;arrow&quot; (none/start/end/both): do not add a second head.
+  * keep everything inside the slide; keep text readable (no smaller than 10pt)
+  * do not save the deck and do not add or remove slides - the harness does the rest
+  * imports only from: collections, colorsys, copy, dataclasses, datetime, decimal, enum, fractions, functools, itertools, json, math, pptx, random, re, statistics, string, textwrap, typing, unicodedata
+  * no network, no files, no subprocesses: none of them exist where this runs
+
+Output JSON: {&quot;code&quot;: &quot;&lt;the module&gt;&quot;, &quot;explanation&quot;: &quot;&lt;one sentence: what you changed&gt;&quot;}
+
+If &quot;feedback&quot; is given, your previous code failed or did the wrong thing: fix exactly that.</pre></div></details>
+  <div class="io"><div class="iobox"><span class="label">User message</span><pre><code>{&quot;request&quot;: &quot;Correct &#x27;recieve&#x27; to &#x27;receive&#x27; in the second card&quot;, &quot;person_asked&quot;: &quot;...&quot;,
+ &quot;slide_number&quot;: 6, &quot;slide_index&quot;: 5, &quot;slide_w_in&quot;: 13.333, &quot;slide_h_in&quot;: 7.5,
+ &quot;shapes&quot;: [{&quot;id&quot;: 7, &quot;kind&quot;: &quot;text_box&quot;, &quot;box_in&quot;: [4.9, 2.2, 3.6, 1.1], &quot;text&quot;: &quot;... recieve ...&quot;, &quot;font_pt&quot;: 13}, ...]}
+retry: + &quot;previous_code&quot;: &quot;...&quot;, &quot;feedback&quot;: [&quot;NameError: ...&quot;]</code></pre></div>
+  <div class="iobox"><span class="label">The model returns</span><pre><code>{&quot;code&quot;: &quot;def build(prs, ctx):\n    slide = prs.slides[ctx[&#x27;slide_index&#x27;]]\n    ...&quot;,
+ &quot;explanation&quot;: &quot;Fixed the spelling of &#x27;receive&#x27; in the second card&quot;}</code></pre></div></div>
+  <p class="then"><b>Then code:</b> Static check → run in the container on a copy → same slide count, no new overflow or overlap; up to 3 tries. join replays it.</p>
+</div>
+<div class="call" id="p-draw">
+  <div class="head"><span class="callnum">DRAW_SYSTEM</span><h3>Draw a custom visual (code)</h3><span class="where">planner.draw_slide · revise/work.py</span></div>
+  <div class="used"><b>Used at:</b> <a href="#s-e3">E3</a> <a href="#s-c8">C8</a> <a href="#s-e6">E6</a> <span>· pictures: the slide</span></div>
+  <details><summary>Full system prompt (552 words)</summary><div><pre class="prompt">You redraw the content of ONE slide of an existing PowerPoint deck with
+python-pptx code, to make a custom visual the deck&#x27;s standard building blocks cannot: a diagram
+with icons made from shapes, arrows, a cycle, a funnel, layered boxes, an annotated process.
+
+You are given: what is wanted; what the slide says now (its content); every shape on it (id,
+name, kind, box in inches, text, font size, fill); the area for content (ctx[&quot;body_in&quot;] as
+[left, top, width, height] in inches); the deck&#x27;s colours by role (ctx[&quot;colours&quot;]) and font
+(ctx[&quot;font&quot;]); and a picture of the slide. &quot;feedback&quot;, when given, says what a reviewer saw
+wrong with the last version: act on it.
+
+&quot;person_asked&quot;, when given, is what the person actually said, in their own words;
+&quot;request&quot; is how a planner who could not see the slides turned it into a task for this slide.
+Look at the picture and decide what the person means. If the request names a cause the picture
+does not show (say &quot;misspelled labels&quot; when the labels are spelled fine but unreadable), follow
+the person&#x27;s words and what you see, not the request. A change that leaves the slide looking
+the same has not done what was asked.
+&quot;house_rules&quot;, when given, are the template owner&#x27;s style guide: spelling, number, currency
+and date formats, capital letters, punctuation, abbreviations. Every word you put on a slide
+follows them - they win over your own habits and over the examples in this prompt.
+
+Write a module defining:
+
+    def build(prs, ctx):
+        slide = prs.slides[ctx[&quot;slide_index&quot;]]     # 0-based
+        ...
+
+  * keep the title, the page number, the footer and the deck&#x27;s decoration; remove the shapes
+    that carried the old content and draw the new visual inside ctx[&quot;body_in&quot;]
+  * keep the slide&#x27;s message and every point it makes (reword to fit; detail can go to the
+    notes: slide.notes_slide.notes_text_frame.text)
+  * look designed: one focal element, aligned on a grid, consistent sizes and spacing, plenty of
+    air. Use only ctx[&quot;colours&quot;] (hex strings, no &#x27;#&#x27;) and white; text in ctx[&quot;font&quot;]; body text
+    13-18pt, never below 11pt; size every text box for its text (wrap long lines) so nothing
+    overflows or overlaps
+  * icons: build them from simple shapes (MSO_SHAPE ovals, rounded rectangles, chevrons,
+    arrows, a few lines) - no pictures exist; block arrows: MSO_SHAPE.RIGHT_ARROW
+  * arrowheads: python-pptx has no setting for them; add one to a line or connector like
+    this (the head goes on the line&#x27;s END point, so draw it from source to target):
+        from pptx.oxml.ns import qn
+        c = slide.shapes.add_connector(MSO_CONNECTOR.STRAIGHT, x1, y1, x2, y2)
+        c.line.color.rgb = RGBColor.from_string(&quot;525B88&quot;); c.line.width = Pt(2)
+        ln = c.line._get_or_add_ln()
+        ln.append(ln.makeelement(qn(&quot;a:tailEnd&quot;), {&quot;type&quot;: &quot;triangle&quot;, &quot;w&quot;: &quot;med&quot;, &quot;len&quot;: &quot;med&quot;}))
+    a two-way line gets &quot;a:headEnd&quot; too. Never say a line has an arrow unless you added one.
+    Lines already on the slide list &quot;arrow&quot; (none/start/end/both): do not add a second head.
+  * EMU everywhere (914400 per inch); from pptx.util import Emu, Pt, Inches;
+    from pptx.dml.color import RGBColor; from pptx.enum.shapes import MSO_SHAPE, MSO_CONNECTOR;
+    from pptx.enum.text import PP_ALIGN, MSO_ANCHOR
+  * do not save the deck and do not add or remove slides
+  * imports only from: collections, colorsys, copy, dataclasses, datetime, decimal, enum, fractions, functools, itertools, json, math, pptx, random, re, statistics, string, textwrap, typing, unicodedata
+  * no network, no files, no subprocesses
+
+Output JSON: {&quot;code&quot;: &quot;&lt;the module&gt;&quot;, &quot;explanation&quot;: &quot;&lt;one sentence: what the slide now shows&gt;&quot;}</pre></div></details>
+  <div class="io"><div class="iobox"><span class="label">User message</span><pre><code>tweak&#x27;s fields, plus:
+ &quot;body_in&quot;: [0.5, 1.49, 12.3, 5.46], &quot;colours&quot;: {&quot;primary&quot;: &quot;334155&quot;, &quot;accent&quot;: &quot;00A896&quot;, ...},
+ &quot;font&quot;: &quot;Calibri&quot;, &quot;content&quot;: {&quot;title&quot;: &quot;...&quot;, &quot;texts&quot;: [...]}</code></pre></div>
+  <div class="iobox"><span class="label">The model returns</span><pre><code>{&quot;code&quot;: &quot;def build(prs, ctx):\n    ...&quot;, &quot;explanation&quot;: &quot;Drew the three causes as boxes flowing into the database&quot;}</code></pre></div></div>
+  <p class="then"><b>Then code:</b> Run and checked exactly like a tweak.</p>
+</div>
+<div class="call" id="p-deck">
+  <div class="head"><span class="callnum">DECK_SYSTEM</span><h3>One change over many slides (code)</h3><span class="where">planner.deck_code · revise/work.py</span></div>
+  <div class="used"><b>Used at:</b> <a href="#s-e3">E3</a> <span>· pictures: two sample slides</span></div>
+  <details><summary>Full system prompt (461 words)</summary><div><pre class="prompt">You change MANY slides of an existing PowerPoint deck the same way, with one piece
+of python-pptx code. The request is about consistency: whatever you do must come out identical
+on every slide it applies to.
+
+You are given: the change wanted; the slides it applies to (ctx[&quot;slides&quot;], 0-based indices);
+for a few of them, every shape (id, name, kind, box in inches, text, font size, fill) and a
+picture; the slide size; the deck&#x27;s colours by role and its font.
+
+&quot;person_asked&quot;, when given, is what the person actually said, in their own words;
+&quot;request&quot; is how a planner who could not see the slides turned it into a task for this slide.
+Look at the picture and decide what the person means. If the request names a cause the picture
+does not show (say &quot;misspelled labels&quot; when the labels are spelled fine but unreadable), follow
+the person&#x27;s words and what you see, not the request. A change that leaves the slide looking
+the same has not done what was asked.
+&quot;house_rules&quot;, when given, are the template owner&#x27;s style guide: spelling, number, currency
+and date formats, capital letters, punctuation, abbreviations. Every word you put on a slide
+follows them - they win over your own habits and over the examples in this prompt.
+
+Write a module defining:
+
+    def build(prs, ctx):
+        for i in ctx[&quot;slides&quot;]:
+            slide = prs.slides[i]
+            ...
+
+  * apply exactly the same rule to every slide in ctx[&quot;slides&quot;]; find shapes by what they are
+    (slide.shapes.title, placeholders, shape kind, position), not by ids from the examples -
+    ids differ from slide to slide
+  * touch only what the request is about; leave every other shape alone
+  * change runs (run.text, run.font) so formatting stays; EMU everywhere (914400 per inch);
+    from pptx.util import Emu, Pt; from pptx.dml.color import RGBColor
+  * arrowheads: python-pptx has no setting for them; add one to a line or connector like
+    this (the head goes on the line&#x27;s END point, so draw it from source to target):
+        from pptx.oxml.ns import qn
+        c = slide.shapes.add_connector(MSO_CONNECTOR.STRAIGHT, x1, y1, x2, y2)
+        c.line.color.rgb = RGBColor.from_string(&quot;525B88&quot;); c.line.width = Pt(2)
+        ln = c.line._get_or_add_ln()
+        ln.append(ln.makeelement(qn(&quot;a:tailEnd&quot;), {&quot;type&quot;: &quot;triangle&quot;, &quot;w&quot;: &quot;med&quot;, &quot;len&quot;: &quot;med&quot;}))
+    a two-way line gets &quot;a:headEnd&quot; too. Never say a line has an arrow unless you added one.
+    Lines already on the slide list &quot;arrow&quot; (none/start/end/both): do not add a second head.
+  * do not save the deck and do not add or remove slides
+  * imports only from: collections, colorsys, copy, dataclasses, datetime, decimal, enum, fractions, functools, itertools, json, math, pptx, random, re, statistics, string, textwrap, typing, unicodedata
+  * no network, no files, no subprocesses
+
+Output JSON: {&quot;code&quot;: &quot;&lt;the module&gt;&quot;, &quot;explanation&quot;: &quot;&lt;one sentence: what changed on every slide&gt;&quot;}
+
+If &quot;feedback&quot; is given, your previous code failed or did the wrong thing: fix exactly that.</pre></div></details>
+  <div class="io"><div class="iobox"><span class="label">User message</span><pre><code>{&quot;request&quot;: &quot;Make every chart&#x27;s value labels 12pt&quot;, &quot;applies_to_slides&quot;: [2, 3, 4, 5, 6],
+ &quot;samples&quot;: [{&quot;slide&quot;: 2, &quot;shapes&quot;: [...]}, {&quot;slide&quot;: 4, &quot;shapes&quot;: [...]}, {&quot;slide&quot;: 6, &quot;shapes&quot;: [...]}],
+ &quot;slide_w_in&quot;: 13.333, &quot;slide_h_in&quot;: 7.5, &quot;colours&quot;: {...}, &quot;font&quot;: &quot;Calibri&quot;}</code></pre></div>
+  <div class="iobox"><span class="label">The model returns</span><pre><code>{&quot;code&quot;: &quot;def build(prs, ctx):\n    for i in ctx[&#x27;slides&#x27;]:\n        ...&quot;, &quot;explanation&quot;: &quot;...&quot;}</code></pre></div></div>
+  <p class="then"><b>Then code:</b> One piece of code, run once on all named slides in the container, checked on every slide.</p>
+</div>
+<div class="call" id="p-review">
+  <div class="head"><span class="callnum">REVIEW_SYSTEM</span><h3>Review changed slides</h3><span class="where">planner.review_changes · revise/nodes.py</span></div>
+  <div class="used"><b>Used at:</b> <a href="#s-c8">C8</a> <a href="#s-e5">E5</a> <a href="#s-e6">E6</a> <span>· pictures: after (and before, when the slide existed) of each slide</span></div>
+  <details><summary>Full system prompt (406 words)</summary><div><pre class="prompt">You review slides that were just changed in a deck, as pictures, next to what
+was asked for each one. You are the last pair of eyes before the person sees them.
+
+For each slide you get &quot;person_asked&quot; - what the person actually said, in their own words, for
+the whole request - and &quot;task&quot; - how a planner turned it into work for that slide. Judge the
+slide against what the PERSON asked. A slide that does what the task says but not what the
+person meant (the task said &quot;fix misspelled labels&quot;; the person said the chart&#x27;s text looks
+broken, and it still does) has not been done.
+
+Each slide comes with its picture AFTER the change and, when it existed before, its picture
+BEFORE the change (the numbers say which attached picture is which). Compare them: the change
+asked for must be visible. A request about the look (&quot;more visual&quot;, &quot;redesign&quot;) that left the
+slide looking much the same has NOT been done - say so, and say what to do instead.
+
+For each slide, say whether it does what was asked and whether a person would happily present
+it. Look for: the change not made, or made to the wrong thing; text cut off, overlapping or
+running off the slide; boxes that collide; a slide that is cramped, lopsided or mostly empty;
+anything that clashes with the rest of the deck&#x27;s look. Do not nitpick wording or taste.
+
+How a slide was made limits how it can be fixed. &quot;made_with&quot;: &quot;pieces&quot; means it was drawn from
+a fixed set of building blocks on a grid (KPI cards, native charts, numbered steps, point
+lists, cards, comparison columns, timelines, tables, a big number, a statement, a 2x2, a
+bottom-line band): ask only for what those can do - rearrange, reword, shorten, pick a different
+block, show more or less. Never ask a &quot;pieces&quot; slide for icons, pictures, arrows or hand-drawn
+shapes. &quot;made_with&quot;: &quot;code&quot; means anything python-pptx can do is possible.
+
+Return JSON:
+{&quot;slides&quot;: [{&quot;slide&quot;: &lt;number&gt;, &quot;ok&quot;: true|false,
+             &quot;problems&quot;: [&quot;&lt;what is wrong and how to fix it, one line each, phrased as an
+                           instruction to the person who will fix it&gt;&quot;],
+             &quot;redo_with&quot;: &quot;same&quot; | &quot;custom_drawing&quot;}]}
+&quot;redo_with&quot;: &quot;custom_drawing&quot; when the fix needs what the building blocks cannot do (icons,
+arrows, a bespoke diagram, a slide that must look truly different); &quot;same&quot; otherwise.
+Only problems worth another pass; &quot;ok&quot;: true with no problems when it is good.</pre></div></details>
+  <div class="io"><div class="iobox"><span class="label">User message</span><pre><code>{&quot;slides&quot;: [{&quot;slide&quot;: 3, &quot;person_asked&quot;: &quot;...&quot;, &quot;task&quot;: &quot;...&quot;, &quot;made_with&quot;: &quot;pieces&quot;,
+             &quot;before_picture&quot;: 1, &quot;after_picture&quot;: 2}, ...],
+ &quot;note&quot;: &quot;pictures are numbered from 1 in the order attached&quot;}</code></pre></div>
+  <div class="iobox"><span class="label">The model returns</span><pre><code>{&quot;slides&quot;: [{&quot;slide&quot;: 3, &quot;ok&quot;: false, &quot;problems&quot;: [&quot;...&quot;], &quot;redo_with&quot;: &quot;custom_drawing&quot;},
+            {&quot;slide&quot;: 6, &quot;ok&quot;: true, &quot;problems&quot;: [], &quot;redo_with&quot;: &quot;same&quot;}]}</code></pre></div></div>
+  <p class="then"><b>Then code:</b> Adds the unchanged-picture check and earlier warnings; weak slides go back to work (redesign may become draw), up to 3 rounds.</p>
+</div>
+<div class="call" id="p-audit">
+  <div class="head"><span class="callnum">AUDIT_SYSTEM</span><h3>Check the whole deck</h3><span class="where">planner.audit_deck · revise/nodes.py</span></div>
+  <div class="used"><b>Used at:</b> <a href="#s-c9">C9</a> <a href="#s-e7">E7</a> <span>· pictures: none (text only)</span></div>
+  <details><summary>Full system prompt (424 words)</summary><div><pre class="prompt">You check a finished slide deck as a whole, from its text: every slide&#x27;s title,
+texts, tables and charts (each chart&#x27;s categories, series, values, axis titles, number formats
+and colours), and what the deck was built from when there is any: &quot;facts&quot; (statements) and
+&quot;datasets&quot; (the data tables its charts were drawn from). A number is sourced when it is in
+either - a chart&#x27;s values usually come from a dataset, not a fact. Pictures of the
+slides were already reviewed one by one; you look for what only shows across slides or in the
+numbers.
+
+Find only real problems, the kind a careful reader would catch:
+  * a chart whose axis title or unit does not match what it shows (the values are euros per km
+    and the axis says &quot;Number of vans&quot;); a value axis with no unit where one is needed
+  * a number format that misstates the numbers (values of 8 and 21 shown with a &quot;%&quot; format that
+    multiplies them by 100, a currency on a count)
+  * a number, date or claim on a slide that contradicts the source facts or another slide (the
+    facts say 150 km, the slide says 180 km) - name both
+  * the same thing named differently across slides in a way that confuses (&quot;Electric&quot; here,
+    &quot;BEV&quot; there), or the same category in different colours on different slides
+  * a heading or label that says something the chart or table beside it does not show
+  * colours that go against meaning when the request or the deck makes the meaning plain (the
+    person asked for electric in green)
+
+Do not report: style or wording preferences, things that are merely improvable, text size or
+layout (other checks do those), or anything you are not sure is wrong. Never ask to invent a
+number: if a figure is in neither the facts nor the datasets, say it is unsourced, do not
+supply one. With no facts or datasets given, do not call anything unsourced.
+
+&quot;person_asked&quot; is what the person said in this request; problems that go against it matter most.
+&quot;house_rules&quot;, when given, are the template&#x27;s style guide: a slide that breaks one (US spelling,
+&quot;$31.5M&quot; where the guide writes millions as &quot;m&quot;, a title in Title Case) is a finding too.
+
+Return JSON:
+{&quot;findings&quot;: [{&quot;slide&quot;: &lt;number&gt;, &quot;problem&quot;: &quot;&lt;what is wrong, quoting the slide&gt;&quot;,
+               &quot;fix&quot;: &quot;&lt;the exact change to make, as an instruction to whoever edits the slide&gt;&quot;}]}
+An empty list when the deck is consistent. At most two findings per slide, most important first.</pre></div></details>
+  <div class="io"><div class="iobox"><span class="label">User message</span><pre><code>{&quot;person_asked&quot;: &quot;...&quot;, &quot;slides&quot;: [{&quot;slide&quot;: 5, &quot;role&quot;: &quot;content&quot;, &quot;title&quot;: &quot;...&quot;, &quot;texts&quot;: [...],
+  &quot;charts&quot;: [{&quot;categories&quot;: [...], &quot;series&quot;: [...], &quot;y_title&quot;: &quot;Scans per day&quot;, &quot;number_formats&quot;: [&quot;0&quot;]}]}, ...],
+ &quot;facts&quot;: [{&quot;id&quot;: &quot;F3&quot;, &quot;text&quot;: &quot;...&quot;}, ...]}</code></pre></div>
+  <div class="iobox"><span class="label">The model returns</span><pre><code>{&quot;findings&quot;: [{&quot;slide&quot;: 5, &quot;problem&quot;: &quot;...&quot;, &quot;fix&quot;: &quot;Change the y-axis title to &#x27;Scans per hour&#x27;&quot;}]}</code></pre></div></div>
+  <p class="then"><b>Then code:</b> Each slide with findings goes back once as a tweak (TWEAK_SYSTEM); the rest are warnings.</p>
+</div>
+<div class="call" id="p-house"><div class="head"><span class="callnum">HOUSE_RULES_SYSTEM</span><h3>Read a template&#x27;s style guide</h3></div>
+  <p class="callwhen">Once, when a template is ingested, if it has style-guide slides. Its rules appear as &quot;house_rules&quot; in later payloads.</p>
+  <details><summary>Full system prompt (225 words)</summary><div><pre class="prompt">You read the style-guide slides of a corporate PowerPoint template and turn
+them into rules for people and programs writing slides in English on that template.
+
+Input JSON: {&quot;slides&quot;: [{&quot;title&quot;: &quot;...&quot;, &quot;text&quot;: &quot;&lt;everything the slide says, tables as rows
+&#x27;a | b&#x27;&gt;&quot;}]}. Guides often give two languages side by side (English and French): take the
+English rules only.
+
+Return JSON:
+{&quot;rules&quot;: [&quot;&lt;one rule per line, short and imperative, with the guide&#x27;s own example: &#x27;Use UK
+            spelling (colour, organisation)&#x27;, &#x27;Write millions as 5m and billions as 5bn&#x27;,
+            &#x27;Put the currency symbol before the figure, no space: EUR 5m is written as the
+            euro sign then 5m&#x27;&gt;&quot;, ...],
+ &quot;checks&quot;: {&quot;spelling&quot;: &quot;UK&quot; | &quot;US&quot; | null,
+            &quot;title_case&quot;: &quot;sentence&quot; | &quot;title&quot; | null,
+            &quot;bullet_full_stop&quot;: true | false | null,
+            &quot;currency_symbol&quot;: &quot;before&quot; | &quot;after&quot; | null,
+            &quot;space_before_unit&quot;: true | false | null,
+            &quot;thousands_separator&quot;: &quot;,&quot; | &quot;.&quot; | &quot; &quot; | null,
+            &quot;decimal_separator&quot;: &quot;.&quot; | &quot;,&quot; | null,
+            &quot;scale&quot;: {&quot;thousand&quot;: &quot;&lt;suffix&gt;&quot;, &quot;million&quot;: &quot;&lt;suffix&gt;&quot;, &quot;billion&quot;: &quot;&lt;suffix&gt;&quot;} | null,
+            &quot;date_format&quot;: &quot;day month year&quot; | &quot;month day year&quot; | null}}
+
+&quot;checks&quot; are only what the guide states plainly; null for anything it does not say. &quot;rules&quot;
+cover everything that applies to slides - including what checks cannot express (abbreviations,
+capital letters for defined terms, foreign words in italics, estimates written 2004e) - and
+nothing that applies only to other documents. At most 25 rules.</pre></div></details></div>
+<div class="call" id="p-look"><div class="head"><span class="callnum">REVIEW_SYSTEM</span><h3>Look at one slide (translate route)</h3></div>
+  <p class="callwhen">The translate route&#x27;s look step.</p>
+  <details><summary>Full system prompt (208 words)</summary><div><pre class="prompt">You are looking at one slide from a finished business deck, as a picture.
+
+Report only problems a person sitting in the room would notice. Judge what you can actually
+see, not what you imagine the intent was.
+
+Look for:
+  * text cut off, running out of its box, or running off the slide
+  * boxes that overlap each other
+  * a box that is empty, or decoration left behind with nothing in it
+  * leftover placeholder or template words (&quot;Example text&quot;, &quot;Lorem ipsum&quot;, &quot;Chart area&quot;)
+  * a heading or a sentence squeezed into a shape meant for a number or an icon
+  * anything obviously misaligned or visibly inconsistent with the rest of the slide
+
+Do NOT report: wording, tone, or style; what content you would have chosen; content you think
+is missing; or anything that is a matter of taste. Those are not yours to judge here, and a
+false alarm costs a rewrite of a slide that was fine.
+
+Severity &quot;high&quot; means a person would not present the slide as it is. Everything else is &quot;low&quot;.
+
+Return JSON:
+{&quot;ok&quot;: &lt;true if a person would be happy to present this slide&gt;,
+ &quot;problems&quot;: [{&quot;what&quot;: &quot;&lt;what is wrong, one line&gt;&quot;, &quot;where&quot;: &quot;&lt;which part of the slide&gt;&quot;,
+               &quot;severity&quot;: &quot;high&quot;|&quot;low&quot;}]}</pre></div></details></div>
+  <h2 id="langgraph">The LangGraph pieces that make this work</h2>
+  <div class="tablewrap"><table>
+    <tr><th>Piece</th><th>Where</th><th>What it does here</th></tr>
+    <tr><td><code>StateGraph(DeckState)</code></td><td>graph.py, state.py</td><td>One graph; every node reads the shared state and returns only the fields it changes.</td></tr>
+    <tr><td><code>add_conditional_edges</code></td><td>graph.py</td><td>After a node, a small function picks the next node: <code>after_route</code>, <code>after_split</code>, <code>after_review</code> …</td></tr>
+    <tr><td><code>Send(node, payload)</code></td><td>design/nodes.py, revise/nodes.py</td><td>A conditional edge may return a list of these: one copy of <code>write</code> or <code>work</code> per item, run in parallel, each with its own small input.</td></tr>
+    <tr><td>Reducers (<code>Annotated[list, accumulate]</code>)</td><td>state.py</td><td><code>slide_specs</code>, <code>task_results</code>, <code>errors</code> collect every copy's output instead of the last one winning. Returning <code>CLEAR</code> empties them at the start of a request.</td></tr>
+    <tr><td>Plain edge after a fan-out (<code>work → join</code>)</td><td>graph.py</td><td>The next node waits until every copy of the fan-out has finished.</td></tr>
+    <tr><td><code>interrupt()</code> + checkpointer</td><td>nodes/router.py (<code>ask</code>), design/nodes.py</td><td>Pauses the run to ask you something. The state is saved in Postgres; your answer resumes the same conversation from that line.</td></tr>
+    <tr><td>Thread id = conversation id</td><td>facade.py</td><td>Every new message in a conversation continues the same saved state: the current deck version, its template, its facts.</td></tr>
+  </table></div>
+
+
+  <h2>Where to look after a run</h2>
+  <div class="section-intro">
+    <p>Each run keeps its records under <code>&lt;deck_id&gt;/&lt;run_id&gt;/</code> in the store: <code>content_pack.json</code> and <code>gather_report.json</code> (facts kept and thrown away), <code>storyline.json</code>, <code>specs.json</code>, the slide pictures, and <code>manifest.json</code> with the full trace of which nodes ran and what each decided.</p>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10.9.1/dist/mermaid.min.js"></script>
+<script>mermaid.initialize({startOnLoad: true, theme: window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "default"});</script>
+</body>
+</html>

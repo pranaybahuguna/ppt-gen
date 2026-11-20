@@ -4,6 +4,11 @@ Builds and edits PowerPoint decks in your own corporate template, from whatever 
 give it - a document, some notes, a request typed into a chat - and edits any deck, including
 one people have already edited by hand.
 
+**New here? Read the walkthrough first:** [docs/deckops-walkthrough.md](docs/deckops-walkthrough.md)
+follows one create and one edit request through every step of the graph, with which prompt each
+step sends and when, and every prompt in full. A styled version is in
+[docs/deckops-walkthrough.html](docs/deckops-walkthrough.html) (open it in a browser).
+
 ```
 "a deck explaining this, for engineers" + notes.md       → create
 "make slide 3 more visual; fix the typo on slide 6"      → edit: one task per slide, in parallel
